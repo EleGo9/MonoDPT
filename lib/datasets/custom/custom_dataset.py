@@ -62,8 +62,6 @@ class Custom_Dataset(data.Dataset):
         self.use_dontcare = cfg.dataset.use_dontcare
         self.depth_threshold = cfg.dataset.depth_threshold
         self.distortion = cfg.dataset.distortion
-        # self.depth_max = cfg.get('model', 'depth_max')
-        # print('Depth_max', self.depth_threshold)
 
         if self.class_merging:
             self.writelist.extend(['Van', 'Truck'])
@@ -81,7 +79,6 @@ class Custom_Dataset(data.Dataset):
         self.calib_dir = os.path.join(self.root_dir, 'calib')
         self.label_dir = os.path.join(self.root_dir, 'label_2')
         self.original_resolution = cfg.dataset.original_resolution
-        print(self.original_resolution)
         # data augmentation configuration
         self.data_augmentation = True if split in ['train', 'trainval', 'all'] else False
 
@@ -137,7 +134,6 @@ class Custom_Dataset(data.Dataset):
         self.pd = PhotometricDistort()
         self.clip_2d = cfg.dataset.clip_2d
         self.kitti_official_eval = cfg.dataset.kitti_official_eval if cfg.dataset.kitti_official_eval is not None else False
-        # print('KITTI OFFICIAL EVAL', self.kitti_official_eval)
     def filter_invalid_projections(self, idx_list):
         """Filter out images with 3D projections that fall outside the image boundaries."""
         print(f"Original dataset size: {len(idx_list)}")
@@ -158,7 +154,7 @@ class Custom_Dataset(data.Dataset):
                 if obj.pos[-1] < 1:
                     continue
                 if obj.pos[-1] > self.depth_threshold:
-                    print(obj.pos[-1])
+                    # print(obj.pos[-1])
                     continue
                 
                 # Check if the 3D center projects inside the image

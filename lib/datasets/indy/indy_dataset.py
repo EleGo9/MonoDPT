@@ -51,8 +51,6 @@ class INDY_Dataset(data.Dataset):
         self.use_dontcare = cfg.dataset.use_dontcare
         self.depth_threshold = cfg.dataset.depth_threshold
         self.distortion = cfg.dataset.distortion
-        # self.depth_max = cfg.get('model', 'depth_max')
-        # print('Depth_max', self.depth_threshold)
 
         if self.class_merging:
             self.writelist.extend(['Van', 'Truck'])
@@ -320,10 +318,10 @@ class INDY_Dataset(data.Dataset):
         for i in range(object_num):
             # filter objects by writelist
             if objects[i].cls_type not in self.writelist:
-                print('!')
+                print()
                 continue
             if objects[i].cls_type == 'DontCare':
-                print('!')
+                print()
                 continue
             # filter inappropriate samples
             # if objects[i].level_str == 'UnKnown' or objects[i].pos[-1] < 2:
@@ -369,9 +367,6 @@ class INDY_Dataset(data.Dataset):
                 proj_inside_img = False
 
             if proj_inside_img == False:
-                # print('proj outside img')
-                print(index)
-                print('-----------------------')
                 if DEBUG:
                     img_vis = img.copy()
                     img_vis = np.transpose(img_vis, (1, 2, 0))
@@ -439,8 +434,6 @@ class INDY_Dataset(data.Dataset):
 
             calibs[i] = calib.P2
 
-            # print('calibs[i]', calibs[i])
-            # print(calib)
 
         if random_mix_flag == True:
             # if False:
@@ -579,7 +572,6 @@ class INDY_Dataset(data.Dataset):
                 'img_size': img_size,
                 'bbox_downsample_ratio': img_size / features_size,
                 'orig_ds': orig_ds}
-        # print('targets',targets.keys())
         if DEBUG:
             from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh, box_cxcylrtb_to_xyxy
             

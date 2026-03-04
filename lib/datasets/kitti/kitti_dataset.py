@@ -561,7 +561,6 @@ if __name__ == '__main__':
             depth_err = depth[i] - depth_geo
             size_3d_geo = depth[i] * box2d_height / calibs[i][1, 1]
             height_err = size_3d_geo - size_3d[i][0]
-            print(float(height_err))
             #size_3d_ = box2d_height * depth[0]  /  calib.P2[0, 0]
         progress_bar.update()
     progress_bar.close()
