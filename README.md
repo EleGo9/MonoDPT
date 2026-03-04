@@ -8,7 +8,7 @@ MonoDPT is a transformer-based framework for 3D object detection from a single c
 
 ## Architecture Overview
 
-![MonoDPT Architecture](assets/architecture.png)
+![MonoDPT Architecture](monodpt_dav2f.pdf)
 
 ```
 Input Image
