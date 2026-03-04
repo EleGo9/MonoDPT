@@ -3,7 +3,7 @@
 **Monocular 3D Object Detection with Depth Priors**
 
 MonoDPT is a transformer-based framework for 3D object detection from a single camera image. It combines DINOv2 Vision Transformer backbones with a depth-aware detection head to predict 3D bounding boxes, object dimensions, orientation, and depth from a single RGB image — without LiDAR or stereo.
-
+**MonoDPT achieves state-of-the-art performances on KITTI benchmark!!!
 ---
 
 ## Architecture Overview
