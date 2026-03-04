@@ -5,17 +5,10 @@ world_size: 1
 gpus_per_node: 1
 
 dataset:
-  type: &dataset_type 'custom'
-root_dir: [
-    # '/media/franco/hdd/dataset/dataset_3d/FINAL_DATASET'
-    # '/media/franco/hdd/dataset/dataset_3d/IVECO_SIM_MONO3D_albarola/iveco_albarola',
-    # '/media/franco/hdd/dataset/dataset_3d/IVECO_SIM_MONO3D_forest/iveco_forest',
-    '/media/franco/hdd/dataset/dataset_3d/IVECO_albarola_real/20250521_ALBAROLA_idv_truck_barra_stationary_econ2_correspMergedCloud',
-    # '/media/franco/hdd/dataset/dataset_3d/IVECO_albarola_real/20250521_ALBAROLA_idv_truck_barra_loop0_econ2_correspMergedCloud',
-    # '/media/franco/hdd/dataset/dataset_3d/IVECO_albarola_real/20250521_ALBAROLA_idv_truck_barra_loop_marker_econ2_correspMergedCloud',
+  type: &dataset_type 'CUSTOM'
+  root_dir: [
     '/media/franco/hdd/dataset/dataset_3d/unscene3d_kitti_format',
-
-            ]
+    ]
   train_split: 'train'
   test_split: 'val'
   batch_size: 1
@@ -26,11 +19,37 @@ root_dir: [
   meanshape: False  # use predefined anchor or not
   writelist: ['Car']
   clip_2d: False
-  depth_threshold: 120
-  distortion: True
+  depth_threshold: 150
+  distortion: False
+
+  class_name: ['Bulldozer','Dump','Excavator', 'Flatbed', 'Tractor', 'Truck', 'Car']
+  # Optional: Define custom class-to-id mapping
+  # If not provided, will auto-generate from class_name
+  cls2id: {'Bulldozer': 0, 'Dump': 1, 'Excavator': 2, 'Flatbed': 3, 'Tractor': 4, 'Truck': 5, 'Car': 6} # {'Car': 0, 'Truck': 1, 'Dump': 2, 'Excavator': 2}
+  max_objs: 50
+
+  # Image resolution [Width, Height]
+  # resolution: [1032, 772]
+  # resolution: [1032, 772]
+  # resolution: [1022, 770]
+  resolution: [560, 448]
+  original_resolution: [1920, 1536]
+  filename_format: ['%015d', '%015d'] # '%015d', '%015d', '%016d']
+
+  cls_mean_size: [
+    [4.1881, 3.9029, 8.5547], #[1.52, 1.63, 3.88],  # Car
+    [6.2809, 9.8863, 9.5645], #[1.52, 1.63, 3.88],  # Pedestrian
+    [4.9265, 3.7821, 8.8905], #[1.52, 1.63, 3.88],
+    [4.0772, 3.6156, 9.4466],
+    [3.2472, 2.5978, 5.0010],
+    [3.4015, 3.0021, 8.7815], #[1.52, 1.63, 3.88],
+    [2.3594, 2.3587, 5.1095], #[1.52, 1.63, 3.88],  # Cyclist
+
+  ]
 
   aug_pd: True
-  aug_crop: True
+  aug_crop: False
+  aug_calib: False
 
   random_flip: 0.5
   random_crop: 0.5
@@ -42,7 +61,7 @@ root_dir: [
 
 model_name: 'monodgp'
 model:
-  num_classes: 3
+  num_classes: 7
   return_intermediate_dec: True
   device: 'cuda'
 

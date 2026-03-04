@@ -8,6 +8,8 @@ MonoDPT is a transformer-based framework for 3D object detection from a single c
 
 ## Architecture Overview
 
+![MonoDPT Architecture](assets/architecture.png)
+
 ```
 Input Image
     │
@@ -73,6 +75,23 @@ pip3 install torch torchvision
 ```bash
 pip install -r requirements.txt
 ```
+
+### 4. Compile Multi-Scale Deformable Attention
+
+```bash
+cd lib/models/monodpt/ops/
+python setup.py build_ext --inplace
+
+# Verify compilation
+ls -lh MultiScaleDeformableAttention*.so
+
+cd ../../../..
+```
+
+**Note**: If compilation fails with "CUDA not available", ensure:
+- `nvcc --version` shows CUDA compiler
+- `echo $CUDA_HOME` points to CUDA installation
+- PyTorch can detect GPU: `python -c "import torch; print(torch.cuda.is_available())"`
 
 ### Weights & Biases
 

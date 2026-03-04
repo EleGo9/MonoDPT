@@ -133,9 +133,9 @@ class InheritedConcatDataset(ConcatDataset):
         Returns:
             Tuple of (3D mAP, 2D mAP) for the matched dataset
         """
-        import lib.datasets.kitti.indy_eval_python.indy_common as indy
+        import lib.datasets.indy.indy_eval_python.indy_common as indy
         import lib.datasets.kitti.kitti_eval_python.kitti_common as kitti
-        from lib.datasets.kitti.indy_eval_python.eval import get_indy_eval_result
+        from lib.datasets.indy.indy_eval_python.eval import get_indy_eval_result
         from lib.datasets.kitti.kitti_eval_python.eval import get_official_eval_result
         from lib.helpers.rpn_util import get_MAE
         import os

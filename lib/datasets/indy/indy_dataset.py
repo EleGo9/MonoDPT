@@ -264,9 +264,11 @@ class INDY_Dataset(data.Dataset):
         img = np.array(img).astype(np.float32) / 255.0
         img = (img - self.mean) / self.std
         img = img.transpose(2, 0, 1)  # C * H * W
+        orig_ds = str(self.image_dir.split('/')[-2])
         info = {'img_id': index,
                 'img_size': img_size,
-                'bbox_downsample_ratio': img_size / features_size}
+                'bbox_downsample_ratio': img_size / features_size,
+                'orig_ds': orig_ds}
         # print('INFO',info)
 
         if self.split == 'test':
@@ -575,7 +577,8 @@ class INDY_Dataset(data.Dataset):
 
         info = {'img_id': index,
                 'img_size': img_size,
-                'bbox_downsample_ratio': img_size / features_size}
+                'bbox_downsample_ratio': img_size / features_size,
+                'orig_ds': orig_ds}
         # print('targets',targets.keys())
         if DEBUG:
             from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh, box_cxcylrtb_to_xyxy

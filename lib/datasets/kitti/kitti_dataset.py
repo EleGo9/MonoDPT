@@ -236,9 +236,11 @@ class KITTI_Dataset(data.Dataset):
         img = (img - self.mean) / self.std
         img = img.transpose(2, 0, 1)  # C * H * W
 
+        orig_ds = str(self.image_dir.split('/')[-2])
         info = {'img_id': index,
                 'img_size': img_size,
-                'bbox_downsample_ratio': img_size / features_size}
+                'bbox_downsample_ratio': img_size / features_size,
+                'orig_ds': orig_ds}
 
         if self.split == 'test':
             calib = self.get_calib(index)
@@ -526,7 +528,8 @@ class KITTI_Dataset(data.Dataset):
 
         info = {'img_id': index,
                 'img_size': img_size,
-                'bbox_downsample_ratio': img_size / features_size}
+                'bbox_downsample_ratio': img_size / features_size,
+                'orig_ds': orig_ds}
         return inputs, calib.P2, targets, info
 
 
