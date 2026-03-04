@@ -18,7 +18,7 @@ DINOv2 ViT Backbone (ViT-S/B/L) + DPT Depth Head
     │
     ├─► Multi-Scale Feature Projection
     │
-    ├─► Depth Predictor (LID — Log-Interval Discretization)
+    ├─► Depth Predictor
     │
     ├─► 2D Detection Transformer (Encoder–Decoder)
     │
