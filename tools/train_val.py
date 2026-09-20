@@ -53,7 +53,7 @@ def main():
     )
 
     logger = WandbLogger(
-        project="IVECO-real", # ;WANDB_MODE=disabled
+        project="UR-pinim", # ;WANDB_MODE=disabled
         log_model=False,
         save_dir=cfg.logdir
     )

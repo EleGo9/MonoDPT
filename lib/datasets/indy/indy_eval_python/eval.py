@@ -1,9 +1,7 @@
 import io as sysio
 
 import numpy as np
-import numba
-# from .rotate_iou_pycuda import rotate_iou_gpu_eval
-from .rotate_iou_numba import rotate_iou_gpu_eval
+from .rotate_iou import rotate_iou_gpu_eval
 
 def get_indy_eval_result(gt_annos, dt_annos, current_classes, max_depth, iou_thres=0.5, PR_detail_dict=None):
     """Get KITTI evaluation result."""

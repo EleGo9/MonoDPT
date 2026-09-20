@@ -76,7 +76,7 @@ class Trainer(object):
                 logger=None)
 
         if cfg.trainer.resume_model is not None:
-            resume_model_path = self.cfg.logdir / 'checkpoints' / self.cfg.trainer.resume_model / "checkpoint.pth" # todo: put in pydantic
+            resume_model_path = self.cfg.logdir / self.cfg.trainer.resume_model / "checkpoints/checkpoint.pth" # todo: put in pydantic
             assert resume_model_path.is_file()
             self.epoch, self.best_result, self.best_epoch, self.state = load_checkpoint(
                 fabric=self.fabric,
@@ -109,6 +109,7 @@ class Trainer(object):
 
         # self.tester.inference(step=self.state.global_step)
         # cur_result = self.tester.evaluate()
+        # exit(0)
         for epoch in range(start_epoch, self.cfg.trainer.max_epoch):
             # reset random seed
             # ref: https://github.com/pytorch/pytorch/issues/5059

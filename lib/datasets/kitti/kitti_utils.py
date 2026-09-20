@@ -6,13 +6,13 @@ import cv2
 def get_objects_from_label(label_file):
     with open(label_file, 'r') as f:
         lines = f.readlines()
-    objects = [Object3d(line) for line in lines]
+    objects = [Object3d(line) for line in lines if len(line.strip().split()) >= 15]
     return objects
 
 
 class Object3d(object):
     def __init__(self, line):
-        label = line.strip().split(' ')
+        label = line.strip().split()
         self.src = line
         self.cls_type = label[0]
         self.trucation = float(label[1])

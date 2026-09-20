@@ -60,7 +60,17 @@ class INDY_Dataset(data.Dataset):
         # data split loading
         assert self.split in ['train', 'val', 'trainval', 'test', 'all']
         self.split_file = os.path.join(self.root_dir, 'ImageSets', self.split + '.txt')
-        self.idx_list = [x.strip() for x in open(self.split_file).readlines()]
+        if os.path.exists(self.split_file):
+            self.idx_list = [x.strip() for x in open(self.split_file).readlines() if x.strip()]
+        else:
+            image_dir = os.path.join(self.root_dir, 'image_2')
+            self.idx_list = [os.path.splitext(name)[0]
+                             for name in sorted(os.listdir(image_dir))
+                             if name.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            if not self.idx_list:
+                raise FileNotFoundError(
+                    f'No split file at {self.split_file} and no images found in {image_dir}')
+            print(f'Split file not found: {self.split_file}; using {len(self.idx_list)} images from {image_dir}')
 
         # path configuration
         # self.data_dir = os.path.join(self.root_dir, 'testing' if split == 'test' else 'training')
