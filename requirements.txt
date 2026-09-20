@@ -11,7 +11,7 @@ seaborn
 wandb
 omegaconf
 python-dotenv
-lighting
+lightning
 rich
 easydict
 onnx
