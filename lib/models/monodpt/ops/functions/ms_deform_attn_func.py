@@ -24,7 +24,7 @@ ctypes.CDLL("libc10.so")  # preload"""
 try:
     import MultiScaleDeformableAttention as MSDA
 except ModuleNotFoundError:
-    from .. import MultiScaleDeformableAttention as MSDA
+    from .. import MultiScaleDeformableAttention as MSDA # better to use the python impl
 
 class MSDeformAttnFunction(Function):
     @staticmethod

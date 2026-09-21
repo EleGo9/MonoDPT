@@ -1,8 +1,8 @@
 import os
+from lib.helpers.config_helper import Config
 import numpy as np
 import torch.utils.data as data
 from PIL import Image, ImageFile
-import random
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from lib.datasets.utils import angle2class
@@ -20,11 +20,9 @@ from lib.datasets.indy.indy_eval_python.eval import get_indy_eval_result
 from lib.helpers.rpn_util import get_MAE
 
 import cv2
-# from lib.visualization import draw_3d_box, draw_transparent_box,draw_2d_boxes, project_3d
-import copy
 from lib.datasets.kitti.pd import PhotometricDistort
-DEBUG = False
 from tqdm.auto import tqdm
+
 class INDY_Dataset(data.Dataset):
     def __init__(self, split, cfg, root_dir=None):
 
@@ -39,14 +37,14 @@ class INDY_Dataset(data.Dataset):
         self.max_objs = 50
         self.class_name = ['Pedestrian', 'Car', 'Cyclist']
         self.cls2id = {'Pedestrian': 0, 'Car': 1, 'Cyclist': 2}
-        self.resolution = np.array([1032, 772])  # W * H
+        self.resolution = np.array(cfg.dataset.resolution) # W * H
         self.use_3d_center = cfg.dataset.use_3d_center
         self.writelist = cfg.dataset.writelist
         self.filename_format = cfg.dataset.filename_format if cfg.dataset.filename_format is not None else '%06d'
         # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
         self.bbox2d_type = cfg.dataset.bbox2d_type
         assert self.bbox2d_type in ['anno', 'proj']
-        self.meanshape = cfg.dataset.meanshape
+        self.use_meanshape = cfg.dataset.use_meanshape
         self.class_merging = cfg.dataset.class_merging
         self.use_dontcare = cfg.dataset.use_dontcare
         self.depth_threshold = cfg.dataset.depth_threshold
@@ -80,7 +78,7 @@ class INDY_Dataset(data.Dataset):
 
         # data augmentation configuration
         self.data_augmentation = True if split in ['train', 'trainval', 'all'] else False
-        self.idx_list = self.filter_invalid_projections(self.idx_list)
+        # self.idx_list = self.filter_invalid_projections(self.idx_list)
 
         self.aug_pd = cfg.dataset.aug_pd
         self.aug_crop = cfg.dataset.aug_crop
@@ -97,15 +95,13 @@ class INDY_Dataset(data.Dataset):
         # statistics
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-        self.cls_mean_size = np.array([[1.76255119    ,0.66068622   , 0.84422524   ],
-                                       [1.52563191462 ,1.62856739989, 3.88311640418],
-                                       [1.73698127    ,0.59706367   , 1.76282397   ]])
-        if not self.meanshape:
+        self.cls_mean_size = np.array(cfg.dataset.cls_mean_size, dtype=np.float32)  # [H, W, L]
+        if not self.use_meanshape:
             self.cls_mean_size = np.zeros_like(self.cls_mean_size, dtype=np.float32)
 
         # others
         self.downsample = 32
-        self.pd = PhotometricDistort()
+        self.pd = PhotometricDistort() #light related stuff
         self.clip_2d = cfg.dataset.clip_2d
         
     def filter_invalid_projections(self, idx_list):
@@ -235,8 +231,10 @@ class INDY_Dataset(data.Dataset):
                     crop_size = img_size * crop_scale
                     center[0] += img_size[0] * np.clip(np.random.randn() * self.shift, -2 * self.shift, 2 * self.shift)
                     center[1] += img_size[1] * np.clip(np.random.randn() * self.shift, -2 * self.shift, 2 * self.shift)
+                    
+        print("[after aug] image shape: {}-{}".format(img.width, img.height))
 
-        if random_mix_flag == True:
+        if random_mix_flag == True: #TODO: ????????????????????
             count_num = 0
             random_mix_flag = False
             while count_num < 50:
@@ -266,6 +264,8 @@ class INDY_Dataset(data.Dataset):
                             method=Image.AFFINE,
                             data=tuple(trans_inv.reshape(-1).tolist()),
                             resample=Image.BILINEAR)
+        
+        #TODO: add crop for image (remove lower part of image) to avoid the influence of the car hood in the image
 
 
         # image encoding
@@ -277,7 +277,7 @@ class INDY_Dataset(data.Dataset):
                 'img_size': img_size,
                 'bbox_downsample_ratio': img_size / features_size,
                 'orig_ds': orig_ds}
-        # print('INFO',info)
+        print('INFO',info)
 
         if self.split == 'test':
             calib = self.get_calib(index)
@@ -354,8 +354,8 @@ class INDY_Dataset(data.Dataset):
             center_2d = np.array([(bbox_2d[0] + bbox_2d[2]) / 2, (bbox_2d[1] + bbox_2d[3]) / 2], dtype=np.float32)  # W * H
             
             # create object region
-            ymin, ymax = int(max(bbox_2d[1], 0)), int(min(bbox_2d[3], img.shape[1]))
-            xmin, xmax = int(max(bbox_2d[0], 0)), int(min(bbox_2d[2], img.shape[2]))
+            ymin, ymax = int(np.maximum(bbox_2d[1], 0)), int(np.minimum(bbox_2d[3], img.shape[1]))
+            xmin, xmax = int(np.maximum(bbox_2d[0], 0)), int(np.minimum(bbox_2d[2], img.shape[2]))
             obj_region[ymin:ymax, xmin:xmax] = 1
             
             corner_2d = bbox_2d.copy()
@@ -475,8 +475,8 @@ class INDY_Dataset(data.Dataset):
                     center_2d = np.array([(bbox_2d[0] + bbox_2d[2]) / 2, (bbox_2d[1] + bbox_2d[3]) / 2], dtype=np.float32)  # W * H
                     
                     # create object region
-                    ymin, ymax = int(max(bbox_2d[1], 0)), int(min(bbox_2d[3], img.shape[1]))
-                    xmin, xmax = int(max(bbox_2d[0], 0)), int(min(bbox_2d[2], img.shape[2]))
+                    ymin, ymax = int(np.maximum(bbox_2d[1], 0)), int(np.minimum(bbox_2d[3], img.shape[1]))
+                    xmin, xmax = int(np.maximum(bbox_2d[0], 0)), int(np.minimum(bbox_2d[2], img.shape[2]))
                     obj_region[ymin:ymax, xmin:xmax] = 1
 
                     corner_2d = bbox_2d.copy()
@@ -584,9 +584,9 @@ class INDY_Dataset(data.Dataset):
                 'orig_ds': orig_ds}
         if DEBUG:
             from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh, box_cxcylrtb_to_xyxy
-            
-            import torch
+            from lib.helpers.visualization import draw_3d_box, draw_transparent_box, draw_2d_boxes, project_3d
             from lib.datasets.utils import class2angle
+            import torch
 
             # 2D visualization
             for box in boxes:
@@ -653,10 +653,27 @@ class INDY_Dataset(data.Dataset):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
-    cfg = {
-           'root_dir': '/path/to/dataset',
-           'random_flip': 0.0, 'random_crop': 1.0, 'scale': 0.8, 'shift': 0.1, 'use_dontcare': False,
-           'class_merging': False, 'writelist':['Pedestrian', 'Car', 'Cyclist'], 'use_3d_center':False, 'depth_threshold': 100,}
+    from omegaconf import OmegaConf
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Monocular 3D Object Detection with Decoupled-Query and Geometry-Error Priors')
+    parser.add_argument('--config', dest='config', help='settings of detection in yaml format', default="configs/monodpt.yaml")
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"Configuration file not found: {args.config}")
+    
+    # cfg = {
+    #        'root_dir': '/path/to/dataset',
+    #        'random_flip': 0.0, 'random_crop': 1.0, 'scale': 0.8, 'shift': 0.1, 'use_dontcare': False,
+    #        'class_merging': False, 'writelist':['Pedestrian', 'Car', 'Cyclist'], 'use_3d_center':False, 'depth_threshold': 100,}
+    
+    # Build Configuration Object
+    config_file = OmegaConf.load(args.config)
+    cfg = Config(**config_file)
+    global DEBUG
+    DEBUG = cfg.debug
+    
     dataset = INDY_Dataset('train', cfg)
     dataloader = DataLoader(dataset=dataset, batch_size=1)
     print(dataset.writelist)

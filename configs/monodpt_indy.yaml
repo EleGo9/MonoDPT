@@ -1,17 +1,18 @@
 random_seed: 444
-logdir: &log_dir "/media/matte/data/pinim/export/logs"
+logdir: &log_dir "/media/matte/data/pinim/export_big/logs"
 fp16: True
 world_size: 1
 gpus_per_node: 1
+debug: &debug True
 
 dataset:
   type: &dataset_type 'INDY'
-  root_dir: '/home/matte/MonoDPT/'
+  root_dir: '/media/matte/data/pinim/export_big/training'
   root_dir_train: [
-    '/media/matte/data/pinim/export/training',
+    '/media/matte/data/pinim/export_big/training',
             ]
   root_dir_test: [
-            "/media/matte/data/pinim/export/testing",
+            "/media/matte/data/pinim/export_big/testing",
             ]
   train_split: 'train'
   test_split: 'val'
@@ -19,12 +20,17 @@ dataset:
   use_3d_center: True
   class_merging: False
   use_dontcare: False
-  bbox2d_type: 'anno'  # 'proj' or 'anno'
-  meanshape: False  # use predefined anchor or not
+  bbox2d_type: 'anno'  # 'proj' or 'anno' # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
+  meanshape: False  # use predefined anchor or not 
   writelist: ['Car']
   clip_2d: False
   depth_threshold: 120
   distortion: True
+  resolution: [1280, 720] # W * H
+  cls_mean_size:   # [H, W, L]
+    - [1.76255119, 0.66068622, 0.84422524]  # Pedestrian
+    - [1.92 ,1.0, 5.235]                    # Car         # A2RL EAV24
+    - [1.73698127, 0.59706367, 1.76282397]  # Cyclist
 
   aug_pd: True
   aug_crop: True
@@ -46,7 +52,7 @@ model:
   # Backbone
   backbone: 'dinov2_vits'
   use_dpt_head: True
-  train_backbone: True
+  train_backbone: False # to test fast
   num_feature_levels: 3
   dilation: False
   position_embedding: 'sine'  # 'sine' or 'learned'

@@ -26,7 +26,7 @@ class DatasetConfig(BaseModel):
     class_merging: bool = False
     use_dontcare: bool = False
     bbox2d_type: str = 'anno'
-    meanshape: bool = False
+    use_meanshape: bool = False
     writelist: List[str] = ['Car']
     clip_2d: bool = False
 
@@ -225,6 +225,8 @@ class Config(BaseModel):
     lr_scheduler: LRSchedulerConfig
     trainer: TrainerConfig
     tester: TesterConfig
+    
+    debug: bool = False  # Debug mode flag
 
     """@root_validator(pre=True)
     def set_default_gpus(cls, values):
