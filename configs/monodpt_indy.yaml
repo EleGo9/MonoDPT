@@ -1,5 +1,5 @@
 random_seed: 444
-logdir: &log_dir "/media/matte/data/pinim/export_big/logs"
+logdir: &log_dir "/media/matte/PinimSandisk/urRecs/tesi/logs"
 fp16: True
 world_size: 1
 gpus_per_node: 1
@@ -7,12 +7,12 @@ debug: &debug True
 
 dataset:
   type: &dataset_type 'INDY'
-  root_dir: '/media/matte/data/pinim/export_big/training'
+  root_dir: '/media/matte/PinimSandisk/urRecs/tesi/export_small/training'
   root_dir_train: [
-    '/media/matte/data/pinim/export_big/training',
+    '/media/matte/PinimSandisk/urRecs/tesi/export_small/training',
             ]
   root_dir_test: [
-            "/media/matte/data/pinim/export_big/testing",
+            "/media/matte/PinimSandisk/urRecs/tesi/export_small/training",
             ]
   train_split: 'train'
   test_split: 'val'
@@ -21,7 +21,7 @@ dataset:
   class_merging: False
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno' # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
-  meanshape: False  # use predefined anchor or not 
+  meanshape: False  # use predefined anchor or not
   writelist: ['Car']
   clip_2d: False
   depth_threshold: 120
@@ -32,12 +32,12 @@ dataset:
     - [1.92 ,1.0, 5.235]                    # Car         # A2RL EAV24
     - [1.73698127, 0.59706367, 1.76282397]  # Cyclist
 
-  aug_pd: True
+  aug_pd: False  # photometric distortion #TODO: change name
   aug_crop: True
 
   random_flip: 0.5
   random_crop: 0.5
-  random_mixup3d: 0.5
+  random_mixup3d: 0.0
   scale: 0.05
   shift: 0.05
 

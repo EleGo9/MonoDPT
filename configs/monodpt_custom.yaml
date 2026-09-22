@@ -1,59 +1,52 @@
 random_seed: 444
-logdir: "/media/franco/hdd/elenagovi/logs"
+logdir: &log_dir "/media/matte/data/pinim/export_big/logs"
 fp16: True
 world_size: 1
 gpus_per_node: 1
+debug: &debug True
 
 dataset:
   type: &dataset_type 'CUSTOM'
-  root_dir: [
-    '/media/franco/hdd/dataset/dataset_3d/unscene3d_kitti_format',
-    ]
+  root_dir: '/media/matte/PinimSandisk/urRecs/tesi/export_small/training'
+  root_dir_train: [
+    '/media/matte/PinimSandisk/urRecs/tesi/export_small/training',
+            ]
+  root_dir_test: [
+            "/media/matte/PinimSandisk/urRecs/tesi/export_small/training",
+            ]
   train_split: 'train'
   test_split: 'val'
   batch_size: 1
   use_3d_center: True
   class_merging: False
   use_dontcare: False
-  bbox2d_type: 'anno'  # 'proj' or 'anno'
+  bbox2d_type: 'anno'  # 'proj' or 'anno' # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
   meanshape: False  # use predefined anchor or not
   writelist: ['Car']
   clip_2d: False
-  depth_threshold: 150
+  depth_threshold: 120
   distortion: False
 
-  class_name: ['Bulldozer','Dump','Excavator', 'Flatbed', 'Tractor', 'Truck', 'Car']
+  class_name: ['Car']
   # Optional: Define custom class-to-id mapping
   # If not provided, will auto-generate from class_name
-  cls2id: {'Bulldozer': 0, 'Dump': 1, 'Excavator': 2, 'Flatbed': 3, 'Tractor': 4, 'Truck': 5, 'Car': 6} # {'Car': 0, 'Truck': 1, 'Dump': 2, 'Excavator': 2}
-  max_objs: 50
+  cls2id: {'Car': 0}
+  max_objs: 5
 
-  # Image resolution [Width, Height]
-  # resolution: [1032, 772]
-  # resolution: [1032, 772]
-  # resolution: [1022, 770]
-  resolution: [560, 448]
-  original_resolution: [1920, 1536]
-  filename_format: ['%015d', '%015d'] # '%015d', '%015d', '%016d']
+  resolution: [1274, 714]
+  original_resolution: [1280, 720]
+  filename_format: ['%06d', '%06d'] # '%015d', '%015d', '%016d']
 
-  cls_mean_size: [
-    [4.1881, 3.9029, 8.5547], #[1.52, 1.63, 3.88],  # Car
-    [6.2809, 9.8863, 9.5645], #[1.52, 1.63, 3.88],  # Pedestrian
-    [4.9265, 3.7821, 8.8905], #[1.52, 1.63, 3.88],
-    [4.0772, 3.6156, 9.4466],
-    [3.2472, 2.5978, 5.0010],
-    [3.4015, 3.0021, 8.7815], #[1.52, 1.63, 3.88],
-    [2.3594, 2.3587, 5.1095], #[1.52, 1.63, 3.88],  # Cyclist
+  cls_mean_size:   # [H, W, L]
+    - [1.92 ,1.0, 5.235] # A2RL EAV24 -> label:"Car"
 
-  ]
-
-  aug_pd: True
+  aug_pd: False
   aug_crop: False
   aug_calib: False
 
   random_flip: 0.5
   random_crop: 0.5
-  random_mixup3d: 0.5
+  random_mixup3d: 0.0
   scale: 0.05
   shift: 0.05
 
@@ -61,14 +54,14 @@ dataset:
 
 model_name: 'monodgp'
 model:
-  num_classes: 7
+  num_classes: 1
   return_intermediate_dec: True
   device: 'cuda'
 
   # Backbone
   backbone: 'dinov2_vits'
   use_dpt_head: True
-  train_backbone: True
+  train_backbone: False
   num_feature_levels: 3
   dilation: False
   position_embedding: 'sine'  # 'sine' or 'learned'
@@ -144,7 +137,7 @@ trainer:
   save_frequency: 1  # checkpoint save interval (in epoch)
   #resume_model: "dummy-69c79ofe"
   #pretrain_model: "/home/carmelo/RICERCA/DET3D/MonoDGP/logs/checkpoints/dummy-69c79ofe/checkpoint.pth"
-  depthany_model: "/home/elenagovi/repos/MonoDGP-DA/checkpoints/depth_anything_v2_vits.pth" 
+  depthany_model: "/home/matte/MonoDPT/depth_anything_v2_vits.pth" 
   save_all: False  # False for only savng the best and latest ckpts
   use_dn: False
   scalar: 5
