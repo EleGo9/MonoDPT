@@ -23,6 +23,7 @@ import cv2
 from lib.datasets.kitti.pd import PhotometricDistort
 from tqdm.auto import tqdm
 
+DEBUG = False
 class INDY_Dataset(data.Dataset):
     def __init__(self, split, cfg, root_dir=None):
 
@@ -689,8 +690,6 @@ if __name__ == '__main__':
     # Build Configuration Object
     config_file = OmegaConf.load(args.config)
     cfg = Config(**config_file)
-    global DEBUG
-    DEBUG = cfg.debug
     
     dataset = INDY_Dataset('train', cfg)
     dataloader = DataLoader(dataset=dataset, batch_size=1)

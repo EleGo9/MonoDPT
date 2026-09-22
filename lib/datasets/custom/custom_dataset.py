@@ -25,6 +25,8 @@ import copy
 from lib.datasets.custom.pd import PhotometricDistort
 from tqdm.auto import tqdm
 
+DEBUG = False
+
 class Custom_Dataset(data.Dataset):
     def __init__(self, split, cfg, root_dir=None, dataset_id=0):
 
@@ -856,8 +858,6 @@ if __name__ == '__main__':
     # Build Configuration Object
     config_file = OmegaConf.load(args.config)
     cfg = Config(**config_file)
-    global DEBUG
-    DEBUG = cfg.debug
 
     dataset = Custom_Dataset('train', cfg)
     dataloader = DataLoader(dataset=dataset, batch_size=1)
