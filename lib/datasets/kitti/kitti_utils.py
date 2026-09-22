@@ -154,6 +154,13 @@ class Calibration(object):
         self.tx = self.P2[0, 3] / (-self.fu)
         self.ty = self.P2[1, 3] / (-self.fv)
 
+        # Distortion parameters
+        try:
+            self.D = calibs['D']
+        except:
+            self.D = np.array([0, 0, 0, 0, 0], dtype=np.float32)
+
+
     def cart_to_hom(self, pts):
         """
         :param pts: (N, 3 or 2)
@@ -186,7 +193,47 @@ class Calibration(object):
         pts_2d_hom = np.dot(pts_rect_hom, self.P2.T)
         pts_img = (pts_2d_hom[:, 0:2].T / pts_rect_hom[:, 2]).T  # (N, 2)
         pts_rect_depth = pts_2d_hom[:, 2] - self.P2.T[3, 2]  # depth in rect camera coord
-        return pts_img, pts_rect_depth
+
+        # Create calibration dictionary
+        calibs = {
+            'K': np.array([
+                [self.fu, 0, self.cu], 
+                [0, self.fv, self.cv], 
+                [0, 0, 1]
+            ]),
+            'D': self.D  # Distortion coefficients
+        }
+        
+        # Apply distortion to each point
+        pts_2d_distorted = np.zeros_like(pts_img)
+        for i in range(pts_img.shape[0]):
+            pts_2d_distorted[i] = self.distort(pts_img[i], calibs)
+
+        # print('pts 2d distorted shape', pts_2d_distorted.shape)
+
+        return pts_2d_distorted, pts_rect_depth
+
+    def distort(self, pt, calibs):
+        # cx = calibs['K'][0, 2]
+        # cy = calibs['K'][1, 2]
+        # fx = calibs['K'][0, 0]
+        # fy = calibs['K'][1, 1]
+        d = calibs['D']
+        d[-1] = 0 # don't use last value
+
+        x = (pt[0] - self.cu) / self.fu
+        y = (pt[1] - self.cv) / self.fv
+
+        r2 = x * x + y * y
+
+        m1 = (1 + d[0] * r2 + d[1] * r2 * r2 + d[4] * r2 * r2 * r2)
+        x_ = x * m1 + 2 * d[2] * x * y + d[3] * (r2 + 2 * x * x)
+        y_ = y * m1 + d[2] * (r2 + 2 * y * y) + 2 * d[3] * x * y
+
+        x = x_ * self.fu + self.cu
+        y = y_ * self.fv + self.cv
+
+        return np.array([x, y])
 
     def lidar_to_img(self, pts_lidar):
         """
