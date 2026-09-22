@@ -202,7 +202,10 @@ class Custom_Dataset(data.Dataset):
     def get_calib(self, idx):
         calib_file = os.path.join(self.calib_dir, f'{self.filename_format}.txt' % idx)
         assert os.path.exists(calib_file)
-        return Calibration(calib_file)
+        load_calib = Calibration(calib_file)
+        if load_calib.D is None or np.all(load_calib.D == 0):
+            print(f"Warning: No distortion parameters found in calibration file {calib_file}. Using default values.")
+        return load_calib
 
     def eval(self, results_dir, logger):
         # self.kitti_official_eval = True
