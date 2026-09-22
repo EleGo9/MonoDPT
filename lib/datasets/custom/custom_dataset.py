@@ -22,9 +22,9 @@ from lib.helpers.rpn_util import get_MAE
 import cv2
 from lib.helpers.visualization import draw_3d_box, draw_transparent_box,draw_2d_boxes, project_3d
 import copy
-from .pd import PhotometricDistort
-DEBUG = False
+from lib.datasets.custom.pd import PhotometricDistort
 from tqdm.auto import tqdm
+
 class Custom_Dataset(data.Dataset):
     def __init__(self, split, cfg, root_dir=None, dataset_id=0):
 
@@ -44,7 +44,7 @@ class Custom_Dataset(data.Dataset):
         self.num_classes = len(self.class_name)
 
         # Configurable resolution (W * H)
-        self.resolution = np.array(cfg.dataset.resolution)
+        self.resolution = np.array(cfg.dataset.resolution) # W * H
 
         # Configurable max objects
         self.max_objs = cfg.dataset.max_objs
@@ -57,7 +57,7 @@ class Custom_Dataset(data.Dataset):
         # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
         self.bbox2d_type = cfg.dataset.bbox2d_type
         assert self.bbox2d_type in ['anno', 'proj']
-        self.meanshape = cfg.dataset.meanshape
+        self.use_meanshape = cfg.dataset.use_meanshape
         self.class_merging = cfg.dataset.class_merging
         self.use_dontcare = cfg.dataset.use_dontcare
         self.depth_threshold = cfg.dataset.depth_threshold
@@ -71,7 +71,17 @@ class Custom_Dataset(data.Dataset):
         # data split loading
         assert self.split in ['train', 'val', 'trainval', 'test', 'all']
         self.split_file = os.path.join(self.root_dir, 'ImageSets', self.split + '.txt')
-        self.idx_list = [x.strip() for x in open(self.split_file).readlines()]
+        if os.path.exists(self.split_file):
+            self.idx_list = [x.strip() for x in open(self.split_file).readlines() if x.strip()]
+        else:
+            image_dir = os.path.join(self.root_dir, 'image_2')
+            self.idx_list = [os.path.splitext(name)[0]
+                             for name in sorted(os.listdir(image_dir))
+                             if name.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            if not self.idx_list:
+                raise FileNotFoundError(
+                    f'No split file at {self.split_file} and no images found in {image_dir}')
+            print(f'Split file not found: {self.split_file}; using {len(self.idx_list)} images from {image_dir}')
 
         # path configuration
         # self.data_dir = os.path.join(self.root_dir, 'testing' if split == 'test' else 'training')
@@ -108,12 +118,7 @@ class Custom_Dataset(data.Dataset):
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
         # Configurable class mean sizes (default: Pedestrian, Car, Cyclist)
-        default_cls_mean_size = np.array([[1.76255119    ,0.66068622   , 0.84422524   ],
-                                          [1.52563191462 ,1.62856739989, 3.88311640418],
-                                          [1.73698127    ,0.59706367   , 1.76282397   ]])
-        self.cls_mean_size = cfg.dataset.cls_mean_size
-        if isinstance(self.cls_mean_size, list):
-            self.cls_mean_size = np.array(self.cls_mean_size, dtype=np.float32)
+        self.cls_mean_size = np.array(cfg.dataset.cls_mean_size, dtype=np.float32)  # [H, W, L]
 
         # Validate cls_mean_size matches number of classes
         if self.cls_mean_size.shape[0] != self.num_classes:
@@ -126,7 +131,7 @@ class Custom_Dataset(data.Dataset):
                 # Truncate
                 self.cls_mean_size = self.cls_mean_size[:self.num_classes]
 
-        if not self.meanshape:
+        if not self.use_meanshape:
             self.cls_mean_size = np.zeros_like(self.cls_mean_size, dtype=np.float32)
 
         # others
@@ -255,6 +260,7 @@ class Custom_Dataset(data.Dataset):
         Args:
             img: PIL Image
             target_size: Target size (W, H)
+            pixel_multiple: If specified, pad the image so that its dimensions are multiples of this value.
 
         Returns:
             img: Resized and padded image
@@ -783,10 +789,10 @@ class Custom_Dataset(data.Dataset):
                 img_vis = (img_vis * 255).astype(np.uint8)
                 img_vis = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
                 cv2.imshow('2D boxes', img_vis)
-                cv2.waitKey(0)
+                # cv2.waitKey(0)
 
             # 3d boxes visualization
-            for box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes_3d, calibs, size_3d, heading_bin, heading_res, depth):
+            for box_2d, box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes, boxes_3d, calibs, size_3d, heading_bin, heading_res, depth):
                 img_vis3d = img.copy()
                 img_vis3d = np.transpose(img_vis3d, (1, 2, 0))
                 p2 = cal_mat
@@ -811,14 +817,16 @@ class Custom_Dataset(data.Dataset):
                 locations = calib.img_to_rect(cx_px, cy_px, dpt[0]).reshape(-1)
                 locations[1] += hwl[0] / 2
                 alpha = class2angle(head_bin, head_res, to_label_format=True)
-                ry = calib.alpha2ry(alpha, b2d_from_3d[0])
+                denorm_box_2d_center = box_2d[0] * self.resolution[0]
+                ry = calib.alpha2ry(alpha, denorm_box_2d_center)
+                
                 verts_cur, _ = project_3d(p2, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
                 try:
                     img_vis3d = draw_3d_box(img_vis3d, verts_cur, color= (255,0,0), thickness= 2)
                 except:
                     print('draw_3d_box error')
                     continue
-                cv2.imshow(f'3D visualization ry={ry_input}', img_vis3d)
+                cv2.imshow(f'3D visualization', img_vis3d)
                 cv2.waitKey(0)
 
         return inputs, calib.P2, targets, info #TODO: check when this matrciz is used, it is maybe wrong!!!
@@ -826,46 +834,32 @@ class Custom_Dataset(data.Dataset):
 
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
-    from types import SimpleNamespace
-
-    # Create a mock config object that mimics the Pydantic structure
-    dataset_cfg = SimpleNamespace(
-        root_dir='/media/franco/hdd/dataset/dataset_3d/IVECO_SIM_MONO3D_forest/ugv_camera_fc_f_n_img',
-        train_split='train',
-        test_split='val',
-        random_flip=0.0,
-        random_crop=1.0,
-        scale=0.8,
-        shift=0.1,
-        use_dontcare=False,
-        class_merging=False,
-        writelist=['Car','Truck', 'Dump', 'Bulldozer','Excavator'],
-        use_3d_center=False,
-        depth_threshold=500,
-        bbox2d_type='anno',
-        meanshape=False,
-        clip_2d=False,
-        aug_pd=False,
-        aug_crop=False,
-        aug_calib=False,
-        random_mixup3d=0.0,
-        depth_scale='normal',
-        distortion=False,
-        # Custom_Dataset specific
-        class_name=['Car', 'Truck', 'Dump', 'Bulldozer', 'Excavator'],
-        cls2id={'Car':0, 'Truck':1, 'Dump':2, 'Bulldozer':3, 'Excavator':4}, 
-        resolution=[1022, 770],
-        max_objs=50,
-        cls_mean_size=[[1.52, 1.63, 3.88], [1.52, 1.63, 3.88], [1.52, 1.63, 3.88],[1.52, 1.63, 3.88],[1.52, 1.63, 3.88]],
-        filename_format='%015d'
-    )
-
-    cfg = SimpleNamespace(dataset=dataset_cfg)
+    from lib.helpers.config_helper import Config
+    from omegaconf import OmegaConf
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Monocular 3D Object Detection with Decoupled-Query and Geometry-Error Priors')
+    parser.add_argument('--config', dest='config', help='settings of detection in yaml format', default="configs/monodpt.yaml")
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"Configuration file not found: {args.config}")
+    
+    # cfg = {
+    #        'root_dir': '/path/to/dataset',
+    #        'random_flip': 0.0, 'random_crop': 1.0, 'scale': 0.8, 'shift': 0.1, 'use_dontcare': False,
+    #        'class_merging': False, 'writelist':['Pedestrian', 'Car', 'Cyclist'], 'use_3d_center':False, 'depth_threshold': 100,}
+    
+    # Build Configuration Object
+    config_file = OmegaConf.load(args.config)
+    cfg = Config(**config_file)
+    global DEBUG
+    DEBUG = cfg.debug
 
     dataset = Custom_Dataset('train', cfg)
     dataloader = DataLoader(dataset=dataset, batch_size=1)
     print(dataset.writelist)
-    max_iter = 25
+    max_iter = 2000
     for batch_idx, (inputs, calib_mat, targets, info) in enumerate(dataloader):
         # test image
         if random.randint(0,4)<2:

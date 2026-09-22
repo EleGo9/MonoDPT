@@ -78,7 +78,7 @@ class INDY_Dataset(data.Dataset):
 
         # data augmentation configuration
         self.data_augmentation = True if split in ['train', 'trainval', 'all'] else False
-        # self.idx_list = self.filter_invalid_projections(self.idx_list)
+        self.idx_list = self.filter_invalid_projections(self.idx_list)
 
         self.aug_pd = cfg.dataset.aug_pd
         self.aug_crop = cfg.dataset.aug_crop
@@ -232,9 +232,7 @@ class INDY_Dataset(data.Dataset):
                     center[0] += img_size[0] * np.clip(np.random.randn() * self.shift, -2 * self.shift, 2 * self.shift)
                     center[1] += img_size[1] * np.clip(np.random.randn() * self.shift, -2 * self.shift, 2 * self.shift)
                     
-        print("[after aug] image shape: {}-{}".format(img.width, img.height))
-
-        if random_mix_flag == True: #TODO: ????????????????????
+        if random_mix_flag == True:
             count_num = 0
             random_mix_flag = False
             while count_num < 50:
@@ -433,6 +431,16 @@ class INDY_Dataset(data.Dataset):
             if heading_angle > np.pi:  heading_angle -= 2 * np.pi  # check range
             if heading_angle < -np.pi: heading_angle += 2 * np.pi
             heading_bin[i], heading_res[i] = angle2class(heading_angle)
+            
+            # print ("[heading_bin]: ", heading_bin[0])
+            # print ("[heading_res]: ", heading_res[0])
+            # print( "[ry]: ", np.rad2deg(objects[i].ry))
+            # from lib.datasets.utils import class2angle
+            # decoded_alpha = class2angle(heading_bin[0], heading_res[0], to_label_format=True)
+            # print ("[alpha after]: {}".format(np.rad2deg(decoded_alpha)))
+            # decoded_ry = calib.alpha2ry(decoded_alpha, (objects[i].box2d[0] + objects[i].box2d[2]) / 2)
+            # print ("[ry after]: {}".format(np.rad2deg(decoded_ry)))
+            # print ("[box2d]: {}".format(objects[i].box2d))
 
             # encoding size_3d
             src_size_3d[i] = np.array([objects[i].h, objects[i].w, objects[i].l], dtype=np.float32)
@@ -607,10 +615,10 @@ class INDY_Dataset(data.Dataset):
                 img_vis = (img_vis * 255).astype(np.uint8)
                 img_vis = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
                 cv2.imshow('2D boxes', img_vis)
-                cv2.waitKey(0)
+                # cv2.waitKey(0)
 
             # 3d boxes visualization
-            for box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes_3d, calibs, size_3d, heading_bin, heading_res, depth):
+            for box_2d, box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes, boxes_3d, calibs, size_3d, heading_bin, heading_res, depth):
                 img_vis3d = img.copy()
                 img_vis3d = np.transpose(img_vis3d, (1, 2, 0))
                 p2 = cal_mat
@@ -632,10 +640,20 @@ class INDY_Dataset(data.Dataset):
                 # cv2.imshow('Projected 3D boxes', img_vis3d)
                 # cv2.waitKey(0)
                 dimens = hwl
+                
+                
                 locations = calib.img_to_rect(cx_px, cy_px, dpt[0]).reshape(-1)
                 locations[1] += hwl[0] / 2
                 alpha = class2angle(head_bin, head_res, to_label_format=True)
-                ry = calib.alpha2ry(alpha, b2d_from_3d[0])
+            
+                
+                denorm_box_2d_center = box_2d[0] * self.resolution[0]
+                ry = calib.alpha2ry(alpha, denorm_box_2d_center)
+                print("[box2d]: {}".format(denorm_box_2d_center))
+                print(f"[viz alpha]: {np.rad2deg(alpha)}")
+                print(f"[viz ry]: {np.rad2deg(ry)}")
+                
+                
                 verts_cur, _ = project_3d(p2, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
                 try:
                     img_vis3d = draw_3d_box(img_vis3d, verts_cur, color= (255,0,0), thickness= 2)
@@ -677,7 +695,7 @@ if __name__ == '__main__':
     dataset = INDY_Dataset('train', cfg)
     dataloader = DataLoader(dataset=dataset, batch_size=1)
     print(dataset.writelist)
-    max = 10
+    max = 2000
     for batch_idx, (inputs, calib_mat, targets, info) in enumerate(dataloader):
         # test image
         img = inputs[0].numpy().transpose(1, 2, 0)
