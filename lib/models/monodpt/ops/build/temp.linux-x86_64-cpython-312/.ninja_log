@@ -1,3 +1,0 @@
-# ninja log v7
-0	2627	1766486532452124407	/home/elenagovi/repos/multigpu/MonoDGP/lib/models/monodpt/ops/build/temp.linux-x86_64-cpython-312/home/elenagovi/repos/multigpu/MonoDGP/lib/models/monodpt/ops/src/cpu/ms_deform_attn_cpu.o	15ab711ed8895cb8
-0	8397	1766486532453641688	/home/elenagovi/repos/multigpu/MonoDGP/lib/models/monodpt/ops/build/temp.linux-x86_64-cpython-312/home/elenagovi/repos/multigpu/MonoDGP/lib/models/monodpt/ops/src/vision.o	ee8b7c5ecad31630
