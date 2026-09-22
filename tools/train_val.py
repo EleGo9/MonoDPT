@@ -47,10 +47,16 @@ def main():
     # Load fabric
     torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
     precision = "16-mixed" if cfg.fp16 else 32
-    strategy = DDPStrategy(
-        precision=precision,  # type: ignore
-        find_unused_parameters=True,
-    )
+
+    # Only initialize DDP if requesting multiple GPUs
+    total_gpus = cfg.gpus_per_node * cfg.world_size
+    if total_gpus > 1:
+        strategy = DDPStrategy(
+            precision=precision,  # type: ignore
+            find_unused_parameters=True,
+        )
+    else:
+        strategy = "auto"
 
     logger = WandbLogger(
         project="UR-pinim", # ;WANDB_MODE=disabled
