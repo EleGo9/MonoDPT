@@ -16,7 +16,7 @@ dataset:
             ]
   train_split: 'train'
   test_split: 'val'
-  batch_size: 1
+  batch_size: 4
   use_3d_center: True
   class_merging: False
   use_dontcare: False
@@ -144,7 +144,7 @@ trainer:
   label_noise_scale: 0.2
   box_noise_scale: 0.4
   num_patterns: 0
-  accum_iter: 4
+  accum_iter: 8
 
 tester:
   type: *dataset_type
