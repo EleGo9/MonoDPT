@@ -165,6 +165,7 @@ class Tester(object):
         self.max_objs = dataloader.dataset.max_objs  # todo  # max objects per images, defined in dataset
         self.class_name = dataloader.dataset.class_name # todo
         self.checkpoint_dir = checkpoint_dir
+        # checkpoint_dir =  Path('/media/matte/data/pinim/export_small/logs/worthy-oath-23/checkpoints/')
         print( "==> Test checkpoint dir: {}".format( str( checkpoint_dir ) ) )
         self.outputs_dir = outputs_dir
         self.dataset_type = cfg.dataset.type 
@@ -187,8 +188,10 @@ class Tester(object):
             if self.cfg.trainer.save_all:
                 checkpoint_path = self.checkpoint_dir / "checkpoint_epoch_{}.pth".format(self.cfg.tester.checkpoint)
             else:
-                # checkpoint_path =  Path('/home/elenagovi/repos/multigpu/MonoDGP/logs/exalted-paper-197/checkpoints/checkpoint_best.pth') #
                 checkpoint_path = Path(self.checkpoint_dir / "checkpoint_best.pth")
+                # checkpoint_path =  Path('/media/matte/data/pinim/export_small/logs/worthy-oath-23/checkpoints/checkpoint_best.pth') #
+                
+            print("==> Test checkpoint path: {}".format(str(checkpoint_path)))
             assert checkpoint_path.is_file()
 
             load_checkpoint(
