@@ -1,7 +1,13 @@
+# PyTorch 2.11.0 with CUDA 12.8
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+
 pyyaml
 scipy
 opencv-python
-numba
+numba==0.65.1
 scikit-image
 scikit-learn
 tqdm
@@ -17,3 +23,6 @@ easydict
 onnx
 onnxruntime-gpu
 onnxscript
+
+# Required/recommended for building the CUDA extension
+ninja

@@ -4,15 +4,15 @@
 
 MonoDPT is a transformer-based framework for 3D object detection from a single camera image. It combines DINOv2 Vision Transformer backbones with a depth-aware detection head to predict 3D bounding boxes, object dimensions, orientation, and depth from a single RGB image — without LiDAR or stereo.
 
+> **MonoDPT achieves state-of-the-art performances on the KITTI benchmark.**
 
-**MonoDPT achieves state-of-the-art performances on KITTI benchmark!!!
 ---
 
 ## Architecture Overview
 
 ![MonoDPT Architecture](monodpt_dav2f.pdf)
 
-```
+```text
 Input Image
     │
     ▼
@@ -35,7 +35,7 @@ DINOv2 ViT Backbone (ViT-S/B/L) + DPT Depth Head
 
 ## Repository Structure
 
-```
+```text
 MonoDPT/
 ├── tools/
 │   ├── train_val.py          # Training + validation entry point
@@ -57,31 +57,90 @@ MonoDPT/
 
 ## Installation
 
-### 1. Create the conda environment
+### Requirements
+
+The currently tested setup is:
+
+| Component | Version |
+|---|---|
+| Python | 3.10 |
+| PyTorch | `2.11.0+cu128` |
+| torchvision | `0.26.0+cu128` |
+| torchaudio | `2.11.0+cu128` |
+| CUDA runtime | 12.8 |
+| CUDA toolkit | 12.8 |
+| `nvcc` | 12.8.93 |
+
+Tested on:
+
+| Component | Version |
+|---|---|
+| OS | Ubuntu 24.04 |
+| GPU | NVIDIA GeForce RTX 5090 |
+| Compute capability | `12.0` (`sm_120`) |
+| NVIDIA driver | 595.84 |
+
+A compatible NVIDIA driver is required. The PyTorch `cu128` wheels provide the CUDA runtime used by PyTorch; the local CUDA toolkit is also required because the repository contains a custom CUDA extension.
+
+### 1. Create the environment
 
 ```bash
 conda create -n monodpt_cu128 python=3.10
 conda activate monodpt_cu128
 ```
 
-### 2. Install PyTorch
+### 2. Install CUDA 12.8 and PyTorch
+
+Install the CUDA toolkit used to compile the custom extension:
 
 ```bash
-pip3 install torch torchvision
+conda install -c nvidia \
+  cuda-version=12.8 \
+  cuda-nvcc=12.8.93 \
+  -y
 ```
 
-> The default `pip3 install torch torchvision` command installs the latest stable release with CUDA support. If you need a specific CUDA version, follow the [PyTorch installation guide](https://pytorch.org/get-started/locally/).
+Set the CUDA environment for the active Conda environment:
 
-### 3. Install remaining dependencies
+```bash
+export CUDA_HOME="$CONDA_PREFIX"
+export CUDA_PATH="$CONDA_PREFIX"
+export PATH="$CUDA_HOME/bin:$PATH"
+export CPATH="$CUDA_HOME/targets/x86_64-linux/include${CPATH:+:$CPATH}"
+export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export TORCH_CUDA_ARCH_LIST="12.0"
+```
+
+For persistent configuration, put the same exports in:
+
+```text
+$CONDA_PREFIX/etc/conda/activate.d/monodpt_cuda.sh
+```
+
+Then install PyTorch:
+
+```bash
+pip install \
+  torch==2.11.0+cu128 \
+  torchvision==0.26.0+cu128 \
+  torchaudio==2.11.0+cu128 \
+  --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+### 3. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Compile Multi-Scale Deformable Attention
+The PyTorch packages are pinned in `requirements.txt` as well.
+
+### 4. Build the CUDA extension
+
+MonoDPT uses a custom Multi-Scale Deformable Attention CUDA extension:
 
 ```bash
-cd lib/models/monodpt/ops/
+cd lib/models/monodpt/ops
 python setup.py build_ext --inplace
 
 # Verify compilation
@@ -90,17 +149,28 @@ ls -lh MultiScaleDeformableAttention*.so
 cd ../../../..
 ```
 
-**Note**: If compilation fails with "CUDA not available", ensure:
-- `nvcc --version` shows CUDA compiler
-- `echo $CUDA_HOME` points to CUDA installation
-- PyTorch can detect GPU: `python -c "import torch; print(torch.cuda.is_available())"`
+The build requires the CUDA toolkit and `nvcc` from the active environment.
+
+If the compiler cannot find CUDA headers such as `cuda_runtime_api.h`, make sure `CUDA_HOME`, `CPATH`, and `LIBRARY_PATH` are set as shown above.
+
+---
 
 ### Weights & Biases
 
-Create a `seecrets.env` file in the project root with your W&B API key:
+Create a `secrets.env` file in the project root with your W&B API key:
 
 ```env
 WANDB_API_KEY=your_wandb_api_key_here
+```
+
+## Experiment Tracking
+
+Training is logged to [Weights & Biases](https://wandb.ai). Model parameters, loss curves, and validation metrics are tracked automatically.
+
+To disable W&B logging:
+
+```bash
+WANDB_MODE=disabled python tools/train_val.py --config configs/monodpt_custom.yaml
 ```
 
 ### Depth Anything V2 Pretrained Weights
@@ -111,7 +181,7 @@ Download the [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything
 
 ## Configuration
 
-All settings are controlled by YAML config files in `configs/`. Key sections:
+All settings are controlled by YAML config files in `configs/`.
 
 | Section | Key parameters |
 |---|---|
@@ -128,40 +198,60 @@ All settings are controlled by YAML config files in `configs/`. Key sections:
 
 ## Training
 
+Run training with the desired dataset configuration:
+
 ```bash
 python tools/train_val.py --config configs/monodpt_kitti.yaml
 ```
 
-**Arguments:**
+### Arguments
 
 | Argument | Default | Description |
 |---|---|---|
 | `--config` | `configs/monodpt.yaml` | Path to YAML config file |
 | `-e` / `--evaluate_only` | `False` | Run evaluation only, skip training |
 
-**Evaluate only:**
+### Evaluate only
 
 ```bash
 python tools/train_val.py --config configs/monodpt_kitti.yaml -e
 ```
 
-**Multi-GPU training** is controlled via the config file:
+### Multi-GPU training
+
+Multi-GPU training is controlled through the config file:
 
 ```yaml
-world_size: 1       # number of nodes
-gpus_per_node: 2    # GPUs per node
+world_size: 1
+gpus_per_node: 2
+
 trainer:
   gpu_ids: '0,1'
-  accum_iter: 4     # gradient accumulation steps
+  accum_iter: 4
 ```
 
-Checkpoints and outputs are saved under `logdir/<run-name>/checkpoints/`.
+Checkpoints and outputs are saved under:
+
+```text
+logdir/<run-name>/checkpoints/
+```
+
+### Debugging CUDA errors
+
+For debugging asynchronous CUDA errors, training can be launched with:
+
+```bash
+CUDA_LAUNCH_BLOCKING=1 python tools/train_val.py \
+  --config configs/monodpt_custom.yaml
+```
+
+Once the training pipeline is stable, `CUDA_LAUNCH_BLOCKING=1` should normally be removed because it forces CUDA operations to execute synchronously and can reduce performance.
 
 ---
 
 ## ONNX Export
 
-Use `demo.py` to load a trained checkpoint and export to ONNX format for deployment:
+Use `demo.py` to load a trained checkpoint and export it to ONNX format:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python tools/demo.py \
@@ -170,7 +260,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/demo.py \
     -onnx
 ```
 
-**Arguments:**
+### Arguments
 
 | Argument | Default | Description |
 |---|---|---|
@@ -178,13 +268,14 @@ CUDA_VISIBLE_DEVICES=0 python tools/demo.py \
 | `--ckpt` | — | Path to trained checkpoint `.pth` file |
 | `-onnx` / `--onnx_export` | `False` | Export model to ONNX |
 
-**ONNX export details:**
+### ONNX export details
+
 - Opset version: **16**
 - Constant folding enabled
 - Legacy exporter (stable for complex deformable attention models)
 - Model is verified with `onnx.checker` and tested with ONNX Runtime
 
-**Exported model inputs/outputs:**
+### Exported model inputs/outputs
 
 | Name | Type | Description |
 |---|---|---|
@@ -253,11 +344,3 @@ FC = Frontal Central camera &nbsp;|&nbsp; FR = Frontal Right camera
 | **Custom** | `monodpt_custom.yaml` | Multiple root dirs, configurable class names |
 
 ---
-
-## Experiment Tracking
-
-Training is logged to [Weights & Biases](https://wandb.ai). Model parameters, loss curves, and validation metrics are tracked automatically. To disable W&B logging, set:
-
-```bash
-WANDB_MODE=disabled python tools/train_val.py --config ...
-```
