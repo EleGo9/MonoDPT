@@ -96,6 +96,7 @@ Install the CUDA toolkit used to compile the custom extension:
 ```bash
 conda install -c nvidia \
   cuda-version=12.8 \
+  cuda-toolkit=12.8 \
   cuda-nvcc=12.8.93 \
   -y
 ```
