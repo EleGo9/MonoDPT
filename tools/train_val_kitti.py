@@ -28,7 +28,7 @@ from lib.helpers.tester_helper import Tester
 from utils.misc import printTrainingParams, printModelParamCounts
 #from lib.helpers.utils_helper import set_random_seed
 
-load_dotenv("seecrets.env")
+load_dotenv("secrets.env")
 os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 
 parser = argparse.ArgumentParser(description='Monocular 3D Object Detection with Decoupled-Query and Geometry-Error Priors')
