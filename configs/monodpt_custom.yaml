@@ -38,7 +38,7 @@ dataset:
   filename_format: ['%06d', '%06d'] # '%015d', '%015d', '%016d']
 
   cls_mean_size:   # [H, W, L]
-    - [1.92 ,1.0, 5.235] # A2RL EAV24 -> label:"Car"
+    - [1.0, 1.92, 5.235] # A2RL EAV24 -> label:"Car"
 
   aug_pd: False
   aug_crop: False
