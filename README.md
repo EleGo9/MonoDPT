@@ -98,6 +98,8 @@ conda install -c nvidia \
   cuda-version=12.8 \
   cuda-toolkit=12.8 \
   cuda-nvcc=12.8.93 \
+  gcc_linux-64=13 \
+  gxx_linux-64=13 \
   -y
 ```
 
