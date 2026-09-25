@@ -8,24 +8,35 @@ from typing import Optional
 from lib.helpers.config_helper import Config
 
 
-def build_lr_scheduler(cfg: Config,
-                       optimizer: torch.optim.Optimizer,
-                       max_epochs: int,
-                       last_epoch: int,
-                       steps_per_epoch: int):
+def build_lr_scheduler(
+    cfg: Config,
+    optimizer: torch.optim.Optimizer,
+    max_epochs: int,
+    last_epoch: int,
+    steps_per_epoch: int,
+):
 
-    # Build warmup scheduler
-    if cfg.lr_scheduler.warmup is not None:
+    base_lrs = [group["lr"] for group in optimizer.param_groups]
+    warmup_steps = (
+        cfg.lr_scheduler.warmup_epochs * steps_per_epoch
+        if cfg.lr_scheduler.warmup is not None
+        else 0
+    )
+    init_lr = cfg.lr_scheduler.warmup_init_lr if warmup_steps else base_lrs[0]
+
+    # Poly decay includes warmup in one LambdaLR so PyTorch initializes it once.
+    if cfg.lr_scheduler.warmup is not None and cfg.lr_scheduler.decay != "poly":
         # Support warmup specified in epochs; convert to steps
-        warmup_epochs = cfg.lr_scheduler.warmup_epochs
-        warmup_steps = warmup_epochs * steps_per_epoch
-        init_lr = cfg.lr_scheduler.warmup_init_lr
         if cfg.lr_scheduler.warmup == "linear":
             # linear warmup code
-            warmup_scheduler = LinearWarmupLR(optimizer, num_epoch=warmup_steps, init_lr=init_lr)
+            warmup_scheduler = LinearWarmupLR(
+                optimizer, num_epoch=warmup_steps, init_lr=init_lr
+            )
         elif cfg.lr_scheduler.warmup == "cos":
             # cos warmup code
-            warmup_scheduler = CosineWarmupLR(optimizer, num_epoch=warmup_steps, init_lr=init_lr)
+            warmup_scheduler = CosineWarmupLR(
+                optimizer, num_epoch=warmup_steps, init_lr=init_lr
+            )
         else:
             warmup_scheduler = None
             # default case
@@ -37,25 +48,58 @@ def build_lr_scheduler(cfg: Config,
         #     case _:
         #         warmup_scheduler = None
     else:
-        warmup_steps = 0
         warmup_scheduler = None
 
-    # Build decay scheduler
-    num_steps = (max_epochs * steps_per_epoch) - warmup_steps
+    # Build a single scheduler so warmup and decay share one step counter.
+    # The trainer calls scheduler.step() once per optimizer update.
+    total_steps = max_epochs * steps_per_epoch
+    decay_steps = max(total_steps - warmup_steps, 1)
     if cfg.lr_scheduler.decay == "step":
         decay_list = cfg.lr_scheduler.decay_list
         decay_rate = cfg.lr_scheduler.decay_rate
-        decay_scheduler = StepDecayLR(optimizer, decay_list=decay_list,decay_rate=decay_rate,
-                                      steps_per_epoch=steps_per_epoch, last_epoch=last_epoch)
+        decay_scheduler = StepDecayLR(
+            optimizer,
+            decay_list=decay_list,
+            decay_rate=decay_rate,
+            steps_per_epoch=steps_per_epoch,
+            last_epoch=last_epoch,
+        )
     elif cfg.lr_scheduler.decay == "cos":
         min_lr = cfg.lr_scheduler.min_decay_lr
-        decay_scheduler = CosineDecayScheduler(optimizer, max_steps=num_steps, min_lr=min_lr, last_epoch=last_epoch)
+        decay_scheduler = CosineDecayScheduler(
+            optimizer, max_steps=decay_steps, min_lr=min_lr, last_epoch=last_epoch
+        )
     elif cfg.lr_scheduler.decay == "poly":
-        def poly_decay_lambda(current_step, total_steps, power=0.9): # Depth-anything V2 scheduler
-            return (1 - current_step / total_steps) ** power
-        decay_scheduler = lr_sched.LambdaLR(optimizer, lr_lambda=lambda step: poly_decay_lambda(step, num_steps))
+        min_lr = cfg.lr_scheduler.min_decay_lr
+
+        def make_poly_lambda(base_lr):
+            def lr_lambda(step):
+                if step <= warmup_steps:
+                    progress = step / warmup_steps if warmup_steps else 1.0
+                    absolute_lr = init_lr + (base_lr - init_lr) * progress
+                else:
+                    progress = min(max((step - warmup_steps) / decay_steps, 0.0), 1.0)
+                    absolute_lr = min_lr + (base_lr - min_lr) * (1.0 - progress) ** 0.9
+                return absolute_lr / base_lr
+
+            return lr_lambda
+
+        decay_scheduler = lr_sched.LambdaLR(
+            optimizer,
+            lr_lambda=[make_poly_lambda(base_lr) for base_lr in base_lrs],
+            last_epoch=last_epoch,
+        )
+        initial_lrs = [
+            base_lr * lr_lambda(0)
+            for base_lr, lr_lambda in zip(base_lrs, decay_scheduler.lr_lambdas)
+        ]
+        for group, lr in zip(optimizer.param_groups, initial_lrs):
+            group["lr"] = lr
+        decay_scheduler._last_lr = initial_lrs
     else:
-        decay_scheduler = lr_sched.LambdaLR(optimizer, lambda x: 1, last_epoch=last_epoch) # constant lr    
+        decay_scheduler = lr_sched.LambdaLR(
+            optimizer, lambda x: 1, last_epoch=last_epoch
+        )  # constant lr
     # match cfg.lr_scheduler.decay:
     #     case "step":
     #         decay_list = cfg.lr_scheduler.decay_list
@@ -72,17 +116,24 @@ def build_lr_scheduler(cfg: Config,
     #     case _:
     #         decay_scheduler = lr_sched.LambdaLR(optimizer, lambda x: 1, last_epoch=last_epoch) # constant lr
 
+    if cfg.lr_scheduler.decay == "poly":
+        return decay_scheduler
     return WarmupThenScheduler(optimizer, warmup_scheduler, decay_scheduler)
 
+
 class WarmupThenScheduler(lr_sched._LRScheduler):
-    def __init__(self,
-                 optimizer: Optimizer,
-                 warmup_scheduler: Optional[lr_sched._LRScheduler],
-                 main_scheduler: lr_sched._LRScheduler):
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        warmup_scheduler: Optional[lr_sched._LRScheduler],
+        main_scheduler: lr_sched._LRScheduler,
+    ):
 
         self.warmup_scheduler = warmup_scheduler
         self.main_scheduler = main_scheduler
-        self.num_warmup = warmup_scheduler.num_epoch if warmup_scheduler is not None else 0
+        self.num_warmup = (
+            warmup_scheduler.num_epoch if warmup_scheduler is not None else 0
+        )
         self.finished_warmup = False
         super().__init__(optimizer)
 
@@ -109,9 +160,9 @@ class WarmupThenScheduler(lr_sched._LRScheduler):
         return self.main_scheduler.get_lr()
 
 
-#-----------------
+# -----------------
 # DECAY SCHEDULERS
-#-----------------
+# -----------------
 class CosineDecayScheduler(lr_sched._LRScheduler):
     def __init__(
         self,
@@ -129,15 +180,22 @@ class CosineDecayScheduler(lr_sched._LRScheduler):
     def get_lr(self):
         step = self.last_epoch
         return [
-            self.min_lr
-            + 0.5 * (base_lr - self.min_lr) * (1 + math.cos(math.pi * step / self.max_steps))
-            if i not in self.fixed_lrs else base_lr
+            (
+                self.min_lr
+                + 0.5
+                * (base_lr - self.min_lr)
+                * (1 + math.cos(math.pi * step / self.max_steps))
+                if i not in self.fixed_lrs
+                else base_lr
+            )
             for i, base_lr in enumerate(self.base_lrs)
         ]
 
 
 class StepDecayLR(lr_sched._LRScheduler):
-    def __init__(self, optimizer, decay_list, decay_rate, steps_per_epoch=None, last_epoch=-1):
+    def __init__(
+        self, optimizer, decay_list, decay_rate, steps_per_epoch=None, last_epoch=-1
+    ):
         if steps_per_epoch:
             decay_list_steps = [int(d * steps_per_epoch) for d in decay_list]
         else:
@@ -160,9 +218,10 @@ class StepDecayLR(lr_sched._LRScheduler):
     def get_lr(self):
         return self.lambda_lr.get_lr()
 
-#-----------------
+
+# -----------------
 # WARMUP SCHEDULERS
-#-----------------
+# -----------------
 class CosineWarmupLR(lr_sched._LRScheduler):
     def __init__(self, optimizer, num_epoch, init_lr=0.0, last_epoch=-1):
         # num_epoch can represent epochs or total warmup steps
@@ -172,10 +231,16 @@ class CosineWarmupLR(lr_sched._LRScheduler):
 
     def get_lr(self):
         # Clamp progress so that when used per-step we don't overshoot
-        progress = min(self.last_epoch, self.num_epoch) / float(self.num_epoch) if self.num_epoch > 0 else 1.0
-        return [self.init_lr + (base_lr - self.init_lr) *
-                (1 - math.cos(math.pi * progress)) / 2
-                for base_lr in self.base_lrs]
+        progress = (
+            min(self.last_epoch, self.num_epoch) / float(self.num_epoch)
+            if self.num_epoch > 0
+            else 1.0
+        )
+        return [
+            self.init_lr
+            + (base_lr - self.init_lr) * (1 - math.cos(math.pi * progress)) / 2
+            for base_lr in self.base_lrs
+        ]
 
 
 class LinearWarmupLR(lr_sched._LRScheduler):
@@ -186,9 +251,15 @@ class LinearWarmupLR(lr_sched._LRScheduler):
         super(LinearWarmupLR, self).__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        progress = min(self.last_epoch, self.num_epoch) / float(self.num_epoch) if self.num_epoch > 0 else 1.0
-        return [self.init_lr + (base_lr - self.init_lr) * progress
-                for base_lr in self.base_lrs]
+        progress = (
+            min(self.last_epoch, self.num_epoch) / float(self.num_epoch)
+            if self.num_epoch > 0
+            else 1.0
+        )
+        return [
+            self.init_lr + (base_lr - self.init_lr) * progress
+            for base_lr in self.base_lrs
+        ]
 
 
 """
@@ -246,7 +317,7 @@ class BNMomentumScheduler(object):
         self.model.apply(self.setter(self.lmbd(epoch)))
 """
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import torch
     import torch.optim as optim
     import matplotlib.pyplot as plt
@@ -261,8 +332,16 @@ if __name__ == '__main__':
     model = torch.nn.Linear(10, 10)
     optimizer = optim.SGD(
         [
-            {"params": [p for n, p in model.named_parameters() if 'bias' in n], "lr": 0.1, "lr_scale": 1.0},  # base group
-            {"params": [p for n, p in model.named_parameters() if 'bias' not in n], "lr": 0.1, "lr_scale": 0.5},  # scaled group
+            {
+                "params": [p for n, p in model.named_parameters() if "bias" in n],
+                "lr": 0.1,
+                "lr_scale": 1.0,
+            },  # base group
+            {
+                "params": [p for n, p in model.named_parameters() if "bias" not in n],
+                "lr": 0.1,
+                "lr_scale": 0.5,
+            },  # scaled group
         ]
     )
 
@@ -270,7 +349,9 @@ if __name__ == '__main__':
     # Build scheduler
     total_epochs = cfg.trainer.max_epoch
     steps_per_epoch = 256
-    scheduler = build_lr_scheduler(cfg, optimizer, total_epochs, last_epoch=-1, steps_per_epoch=steps_per_epoch)
+    scheduler = build_lr_scheduler(
+        cfg, optimizer, total_epochs, last_epoch=-1, steps_per_epoch=steps_per_epoch
+    )
 
     # -------------------------------------------------------------------
     # Simulate LR over all steps

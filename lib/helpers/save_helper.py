@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from lightning.fabric import Fabric
 import os
+
 os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 
 
@@ -17,15 +18,18 @@ def model_state_to_cpu(model_state):
     return model_state_cpu
 
 
-def get_checkpoint_state(model: Optional[nn.Module] = None,
-                         optimizer: Optional[torch.optim.Optimizer] = None,
-                         epoch: Optional[int] = None,
-                         trainer_state: Optional[dataclass] = None,
-                         best_result: Optional[int] = None,
-                         best_epoch: Optional[int] = None
-                         ):
+def get_checkpoint_state(
+    model: Optional[nn.Module] = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[Any] = None,
+    epoch: Optional[int] = None,
+    trainer_state: Optional[dataclass] = None,
+    best_result: Optional[int] = None,
+    best_epoch: Optional[int] = None,
+):
 
     optim_state = optimizer.state_dict() if optimizer is not None else None
+    scheduler_state = scheduler.state_dict() if scheduler is not None else None
     if model is not None:
         if isinstance(model, torch.nn.DataParallel):
             model_state = model_state_to_cpu(model.module.state_dict())
@@ -34,34 +38,43 @@ def get_checkpoint_state(model: Optional[nn.Module] = None,
     else:
         model_state = None
 
-    return {'epoch': epoch,
-            'trainer_state': trainer_state,
-            'model_state': model_state,
-            'optimizer_state': optim_state,
-            'best_result': best_result,
-            'best_epoch': best_epoch}
+    return {
+        "epoch": epoch,
+        "trainer_state": trainer_state,
+        "model_state": model_state,
+        "optimizer_state": optim_state,
+        "scheduler_state": scheduler_state,
+        "best_result": best_result,
+        "best_epoch": best_epoch,
+    }
 
 
 def save_checkpoint(state: dict, filename: Path):
-    filename = '{}.pth'.format(filename)
+    filename = "{}.pth".format(filename)
     torch.save(state, filename)
 
 
-def load_checkpoint(fabric: Fabric,
-                    model: Optional[nn.Module],
-                    optimizer: Optional[torch.optim.Optimizer],
-                    filename: Path, logger: Optional[Any] = None):
+def load_checkpoint(
+    fabric: Fabric,
+    model: Optional[nn.Module],
+    optimizer: Optional[torch.optim.Optimizer],
+    filename: Path,
+    logger: Optional[Any] = None,
+    scheduler: Optional[Any] = None,
+):
     if os.path.isfile(filename):
         print("==> Loading from checkpoint '{}'".format(str(filename)))
         checkpoint = fabric.load(filename)
-        epoch = checkpoint.get('epoch', -1)
-        best_result = checkpoint.get('best_result', 0.0)
-        best_epoch = checkpoint.get('best_epoch', 0.0)
-        if model is not None and checkpoint['model_state'] is not None:
-            model.load_state_dict(checkpoint['model_state'])
-        if optimizer is not None and checkpoint['optimizer_state'] is not None:
-            optimizer.load_state_dict(checkpoint['optimizer_state'])
-        trainer_state = checkpoint['trainer_state']
+        epoch = checkpoint.get("epoch", -1)
+        best_result = checkpoint.get("best_result", 0.0)
+        best_epoch = checkpoint.get("best_epoch", 0.0)
+        if model is not None and checkpoint["model_state"] is not None:
+            model.load_state_dict(checkpoint["model_state"])
+        if optimizer is not None and checkpoint["optimizer_state"] is not None:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if scheduler is not None and checkpoint.get("scheduler_state") is not None:
+            scheduler.load_state_dict(checkpoint["scheduler_state"])
+        trainer_state = checkpoint["trainer_state"]
         print("==> Done")
     else:
         raise FileNotFoundError
@@ -69,10 +82,9 @@ def load_checkpoint(fabric: Fabric,
     return epoch, best_result, best_epoch, trainer_state
 
 
-def load_depthany_checkpoint(fabric: Fabric,
-                             model: nn.Module,
-                             filename: Path,
-                             key_mapping: dict):
+def load_depthany_checkpoint(
+    fabric: Fabric, model: nn.Module, filename: Path, key_mapping: dict
+):
     """
     Load Depth Anything V2 checkpoint with custom key mapping.
 
@@ -102,7 +114,7 @@ def load_depthany_checkpoint(fabric: Fabric,
 
     for ckpt_key, ckpt_value in checkpoint.items():
         # Remove 'module.' prefix if present (from DDP)
-        ckpt_key = ckpt_key.replace('module.', '')
+        ckpt_key = ckpt_key.replace("module.", "")
 
         # Check which mapping applies
         for ckpt_prefix, model_prefix in key_mapping.items():
@@ -136,7 +148,7 @@ def load_depthany_checkpoint(fabric: Fabric,
             print(f"      {key}")
         print(f"      ... and {len(missing) - 5} more")
 
-    assert len(unexpected) == 0 # make sure we loaded all DAV2 weights
+    assert len(unexpected) == 0  # make sure we loaded all DAV2 weights
     print(f"  - Unexpected keys: {len(unexpected)}")
     if unexpected and len(unexpected) <= 10:
         for key in unexpected:

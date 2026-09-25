@@ -15,23 +15,27 @@ from lib.helpers.save_helper import save_checkpoint
 from lib.helpers.save_helper import load_depthany_checkpoint
 from lib.helpers.config_helper import Config
 
+
 @dataclass
 class TrainingState:
     global_iteration: int
     global_step: int
 
+
 class Trainer(object):
-    def __init__(self,
-                 fabric: Fabric,
-                 cfg: Config,
-                 model: nn.Module,
-                 optimizer: torch.optim.Optimizer,
-                 train_loader: DataLoader,
-                 test_loader: DataLoader,
-                 lr_scheduler: optim.lr_scheduler._LRScheduler,
-                 loss: nn.Module,
-                 model_name: str,
-                 checkpoint_dir: Path):
+    def __init__(
+        self,
+        fabric: Fabric,
+        cfg: Config,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        train_loader: DataLoader,
+        test_loader: DataLoader,
+        lr_scheduler: optim.lr_scheduler._LRScheduler,
+        loss: nn.Module,
+        model_name: str,
+        checkpoint_dir: Path,
+    ):
 
         self.fabric = fabric
         self.cfg = cfg
@@ -60,9 +64,9 @@ class Trainer(object):
                 model=self.model,
                 filename=cfg.trainer.depthany_model,
                 key_mapping={
-                    'pretrained': 'backbone.0.backbone',
-                    'depth_head': 'backbone.0.dpt_head' #<----------- ATTENZIONE!! (wip)
-                }
+                    "pretrained": "backbone.0.backbone",
+                    "depth_head": "backbone.0.dpt_head",  # <----------- ATTENZIONE!! (wip)
+                },
             )
 
         # loading pretrain/resume model
@@ -73,20 +77,29 @@ class Trainer(object):
                 model=self.model,
                 optimizer=None,
                 filename=cfg.trainer.pretrain_model,
-                logger=None)
+                logger=None,
+            )
 
         if cfg.trainer.resume_model is not None:
-            resume_model_path = self.cfg.logdir / self.cfg.trainer.resume_model / "checkpoints/checkpoint.pth" # todo: put in pydantic
+            resume_model_path = (
+                self.cfg.logdir
+                / self.cfg.trainer.resume_model
+                / "checkpoints/checkpoint.pth"
+            )  # todo: put in pydantic
             assert resume_model_path.is_file()
             self.epoch, self.best_result, self.best_epoch, self.state = load_checkpoint(
                 fabric=self.fabric,
                 model=self.model,
                 optimizer=self.optimizer,
                 filename=resume_model_path,
-                logger=None)
-
-            self.lr_scheduler.last_epoch = self.epoch - 1
-            print("Loading Checkpoint... Best Result:{}, Best Epoch:{}".format(self.best_result, self.best_epoch))
+                logger=None,
+                scheduler=self.lr_scheduler,
+            )
+            print(
+                "Loading Checkpoint... Best Result:{}, Best Epoch:{}".format(
+                    self.best_result, self.best_epoch
+                )
+            )
         else:
             self.state = TrainingState(global_step=0, global_iteration=0)
 
@@ -97,13 +110,17 @@ class Trainer(object):
     def log(self, key, value, step):
         if step % 2 == 0:
             self.fabric.log(key, value, step=step)
-        
+
     def train(self):
         start_epoch = self.epoch
 
-        progress_bar = tqdm.tqdm(range(start_epoch, self.cfg.trainer.max_epoch),
-                                 dynamic_ncols=True, leave=True, desc='epochs',
-                                 disable=not self.rank_zero)
+        progress_bar = tqdm.tqdm(
+            range(start_epoch, self.cfg.trainer.max_epoch),
+            dynamic_ncols=True,
+            leave=True,
+            desc="epochs",
+            disable=not self.rank_zero,
+        )
         best_result = self.best_result
         best_epoch = self.best_epoch
 
@@ -123,16 +140,27 @@ class Trainer(object):
 
                 if self.rank_zero:
                     if self.cfg.trainer.save_all:
-                        ckpt_name = self.checkpoint_dir / 'checkpoint_epoch_%d' / self.epoch
+                        ckpt_name = (
+                            self.checkpoint_dir / "checkpoint_epoch_%d" / self.epoch
+                        )
                     else:
-                        ckpt_name = self.checkpoint_dir / 'checkpoint'
+                        ckpt_name = self.checkpoint_dir / "checkpoint"
 
                     # node: by using fabri.save we dont need to deal with rank_0 here
                     save_checkpoint(
-                            get_checkpoint_state(self.model, self.optimizer, self.epoch, self.state, best_result, best_epoch),
-                            ckpt_name)
+                        get_checkpoint_state(
+                            model=self.model,
+                            optimizer=self.optimizer,
+                            scheduler=self.lr_scheduler,
+                            epoch=self.epoch,
+                            trainer_state=self.state,
+                            best_result=best_result,
+                            best_epoch=best_epoch,
+                        ),
+                        ckpt_name,
+                    )
 
-                if self.tester is not None: # todo: rank0 save
+                if self.tester is not None:  # todo: rank0 save
                     print("Test Epoch {}".format(self.epoch))
                     self.tester.inference(step=self.state.global_step)
                     cur_result = self.tester.evaluate()
@@ -151,9 +179,13 @@ class Trainer(object):
                                 all_2d_maps.append(ds_result[1])
                             else:
                                 all_3d_maps.append(ds_result)
-                        metric_value = sum(all_3d_maps) / len(all_3d_maps) if all_3d_maps else 0.0
+                        metric_value = (
+                            sum(all_3d_maps) / len(all_3d_maps) if all_3d_maps else 0.0
+                        )
                         cur_result_3d = metric_value
-                        cur_result_2d = sum(all_2d_maps) / len(all_2d_maps) if all_2d_maps else None
+                        cur_result_2d = (
+                            sum(all_2d_maps) / len(all_2d_maps) if all_2d_maps else None
+                        )
                     elif isinstance(cur_result, tuple):
                         cur_result_3d, cur_result_2d = cur_result
                         metric_value = cur_result_3d  # Use 3D mAP as primary metric
@@ -165,15 +197,32 @@ class Trainer(object):
                     if self.rank_zero and metric_value > best_result:
                         best_result = metric_value
                         best_epoch = self.epoch
-                        ckpt_name = self.checkpoint_dir / 'checkpoint_best'
+                        ckpt_name = self.checkpoint_dir / "checkpoint_best"
                         save_checkpoint(
-                            get_checkpoint_state(self.model, self.optimizer, self.epoch, self.state, best_result, best_epoch),
-                            ckpt_name)
-                        self.fabric.log(f"test/3DmAP_best", cur_result_3d, step=self.state.global_step)  # log best
+                            get_checkpoint_state(
+                                model=self.model,
+                                optimizer=self.optimizer,
+                                scheduler=self.lr_scheduler,
+                                epoch=self.epoch,
+                                trainer_state=self.state,
+                                best_result=best_result,
+                                best_epoch=best_epoch,
+                            ),
+                            ckpt_name,
+                        )
+                        self.fabric.log(
+                            f"test/3DmAP_best",
+                            cur_result_3d,
+                            step=self.state.global_step,
+                        )  # log best
 
-                    self.fabric.log(f"test/3DmAP", cur_result_3d, step=self.state.global_step)  # always log metric!
+                    self.fabric.log(
+                        f"test/3DmAP", cur_result_3d, step=self.state.global_step
+                    )  # always log metric!
                     if cur_result_2d is not None:
-                        self.fabric.log(f"test/2DmAP", cur_result_2d, step=self.state.global_step)  # log 2D mAP if available
+                        self.fabric.log(
+                            f"test/2DmAP", cur_result_2d, step=self.state.global_step
+                        )  # log 2D mAP if available
 
                     print("Best Result:{}, epoch:{}".format(best_result, best_epoch))
 
@@ -188,7 +237,12 @@ class Trainer(object):
         self.model.train()
         self.fabric.log("epoch", epoch, step=self.state.global_step)
 
-        progress_bar = tqdm.tqdm(total=len(self.train_loader), leave=(self.epoch+1 == self.cfg.trainer.max_epoch), desc='iters', disable=not self.rank_zero)
+        progress_bar = tqdm.tqdm(
+            total=len(self.train_loader),
+            leave=(self.epoch + 1 == self.cfg.trainer.max_epoch),
+            desc="iters",
+            disable=not self.rank_zero,
+        )
 
         # Per-class loss tracking - accumulate over epoch
         per_class_losses = {}
@@ -207,20 +261,30 @@ class Trainer(object):
             # update the stored iteration
             self.state.global_iteration = next_iter
 
-            img_sizes = targets['img_size']
+            img_sizes = targets["img_size"]
             targets = self.prepare_targets(targets, inputs.shape[0])
 
             # Denoising args
             dn_args = None
             if self.cfg.trainer.use_dn:
-                dn_args=(targets, self.cfg.trainer.scalar, self.cfg.trainer.label_noise_scale, self.cfg.trainer.box_noise_scale, self.cfg.trainer.num_patterns)
+                dn_args = (
+                    targets,
+                    self.cfg.trainer.scalar,
+                    self.cfg.trainer.label_noise_scale,
+                    self.cfg.trainer.box_noise_scale,
+                    self.cfg.trainer.num_patterns,
+                )
 
             # train one batch
             with self.fabric.no_backward_sync(self.model, enabled=not is_step):
                 with self.fabric.autocast():
-                    outputs = self.model(inputs, calibs, targets, img_sizes, dn_args=dn_args)
+                    outputs = self.model(
+                        inputs, calibs, targets, img_sizes, dn_args=dn_args
+                    )
                     mask_dict = None
-                    detr_losses_dict = self.detr_loss(outputs, targets, mask_dict, self.fabric)
+                    detr_losses_dict = self.detr_loss(
+                        outputs, targets, mask_dict, self.fabric
+                    )
 
                     weight_dict = self.detr_loss.weight_dict
                     detr_losses_dict_weighted = [
@@ -232,25 +296,35 @@ class Trainer(object):
 
                     if is_step:
                         # Reduce across nodes
-                        detr_losses_dict = self.fabric.all_reduce(detr_losses_dict, reduce_op="mean")
+                        detr_losses_dict = self.fabric.all_reduce(
+                            detr_losses_dict, reduce_op="mean"
+                        )
 
                         detr_losses_dict_log = {}
                         detr_losses_log = 0
                         for k in detr_losses_dict.keys():
                             if k in weight_dict:
-                                detr_losses_dict_log[k] = (detr_losses_dict[k] * weight_dict[k]).item()
+                                detr_losses_dict_log[k] = (
+                                    detr_losses_dict[k] * weight_dict[k]
+                                ).item()
                                 detr_losses_log += detr_losses_dict_log[k]
                         detr_losses_dict_log["loss_detr"] = detr_losses_log
 
                         # Log to Fabric
-                        self.log("train/loss_detr", detr_losses_log, step=self.state.global_step)
+                        self.log(
+                            "train/loss_detr",
+                            detr_losses_log,
+                            step=self.state.global_step,
+                        )
 
                         for k, v in detr_losses_dict_log.items():
                             if k != "loss_detr":
                                 self.log(f"train/{k}", v, step=self.state.global_step)
 
                         # Compute per-class losses
-                        self._update_per_class_losses(outputs, targets, per_class_losses, per_class_counts)
+                        self._update_per_class_losses(
+                            outputs, targets, per_class_losses, per_class_counts
+                        )
 
                     detr_losses /= self.cfg.trainer.accum_iter
                     self.fabric.backward(detr_losses)
@@ -264,12 +338,17 @@ class Trainer(object):
                 self.lr_scheduler.step()
 
                 # Update lr_scale
-                for lr, group in zip(self.lr_scheduler.get_last_lr(), self.lr_scheduler.optimizer.param_groups):
+                for lr, group in zip(
+                    self.lr_scheduler.get_last_lr(),
+                    self.lr_scheduler.optimizer.param_groups,
+                ):
                     if "lr_scale" in group:
                         group["lr"] = lr * group["lr_scale"]
                     else:
                         group["lr"] = lr
-                    self.fabric.log(f"lr/{group['name']}", group["lr"], step=self.state.global_step)
+                    self.fabric.log(
+                        f"lr/{group['name']}", group["lr"], step=self.state.global_step
+                    )
 
                 # update progressbar
                 progress_bar.set_postfix({"train_loss": detr_losses.item()})
@@ -284,41 +363,52 @@ class Trainer(object):
 
     def prepare_targets(self, targets, batch_size):
         targets_list = []
-        mask = targets['mask_2d']
+        mask = targets["mask_2d"]
 
-        key_list = ['labels', 'boxes', 'calibs', 'depth', 'size_3d', 'heading_bin', 'heading_res', 'boxes_3d']
+        key_list = [
+            "labels",
+            "boxes",
+            "calibs",
+            "depth",
+            "size_3d",
+            "heading_bin",
+            "heading_res",
+            "boxes_3d",
+        ]
         for bz in range(batch_size):
             target_dict = {}
             for key, val in targets.items():
                 if key in key_list:
                     target_dict[key] = val[bz][mask[bz]]
-                if key == 'depth_map':
+                if key == "depth_map":
                     target_dict[key] = val[bz]
-                if key == 'obj_region':
+                if key == "obj_region":
                     target_dict[key] = val[bz]
             targets_list.append(target_dict)
         return targets_list
 
-    def _update_per_class_losses(self, outputs, targets, per_class_losses, per_class_counts):
+    def _update_per_class_losses(
+        self, outputs, targets, per_class_losses, per_class_counts
+    ):
         """Update per-class loss tracking for current batch"""
         import torch.nn.functional as F
         from lib.losses.focal_loss import sigmoid_focal_loss
 
         # Get predictions from final layer
-        src_logits = outputs['pred_logits']  # [batch, num_queries, num_classes]
-        pred_depth = outputs['pred_depth'][:, :, 0]  # [batch, num_queries]
-        pred_angle = outputs['pred_angle']  # [batch, num_queries, 24]
+        src_logits = outputs["pred_logits"]  # [batch, num_queries, num_classes]
+        pred_depth = outputs["pred_depth"][:, :, 0]  # [batch, num_queries]
+        pred_angle = outputs["pred_angle"]  # [batch, num_queries, 24]
 
         # For each batch item, compute losses per ground truth object
         for batch_idx, target in enumerate(targets):
-            if len(target['labels']) == 0:
+            if len(target["labels"]) == 0:
                 continue
 
             # Handle squeeze carefully to avoid 0-d tensors when only 1 object
-            gt_labels = target['labels'].view(-1).long()  # [num_objects]
-            gt_depth = target['depth'].view(-1)  # [num_objects]
-            gt_heading_bin = target['heading_bin']  # [num_objects, 12]
-            gt_heading_res = target['heading_res']  # [num_objects, 12]
+            gt_labels = target["labels"].view(-1).long()  # [num_objects]
+            gt_depth = target["depth"].view(-1)  # [num_objects]
+            gt_heading_bin = target["heading_bin"]  # [num_objects, 12]
+            gt_heading_res = target["heading_res"]  # [num_objects, 12]
 
             # For each ground truth object
             for obj_idx in range(gt_labels.shape[0]):
@@ -328,9 +418,9 @@ class Trainer(object):
                 # Initialize tracking for this class if needed
                 if class_id not in per_class_losses:
                     per_class_losses[class_id] = {
-                        'classification': 0.0,
-                        'depth': 0.0,
-                        'angle': 0.0
+                        "classification": 0.0,
+                        "depth": 0.0,
+                        "angle": 0.0,
                     }
                     per_class_counts[class_id] = 0
 
@@ -348,7 +438,7 @@ class Trainer(object):
                     target_onehot.unsqueeze(0).unsqueeze(0),
                     num_boxes=1,
                     alpha=0.25,
-                    gamma=2
+                    gamma=2,
                 ).item()
 
                 # Depth loss (L1 loss)
@@ -367,22 +457,22 @@ class Trainer(object):
                 bin_cls_loss = F.cross_entropy(
                     heading_bin_pred.unsqueeze(0),
                     heading_bin_gt.argmax().unsqueeze(0),
-                    reduction='mean'
+                    reduction="mean",
                 ).item()
 
                 # Residual loss only for the correct bin
                 bin_idx = heading_bin_gt.argmax()
                 res_loss = F.l1_loss(
                     heading_res_pred[bin_idx].unsqueeze(0),
-                    heading_res_gt[bin_idx].unsqueeze(0)
+                    heading_res_gt[bin_idx].unsqueeze(0),
                 ).item()
 
                 angle_loss = bin_cls_loss + res_loss
 
                 # Accumulate losses
-                per_class_losses[class_id]['classification'] += cls_loss
-                per_class_losses[class_id]['depth'] += depth_loss
-                per_class_losses[class_id]['angle'] += angle_loss
+                per_class_losses[class_id]["classification"] += cls_loss
+                per_class_losses[class_id]["depth"] += depth_loss
+                per_class_losses[class_id]["angle"] += angle_loss
                 per_class_counts[class_id] += 1
 
     def _log_per_class_losses(self, per_class_losses, per_class_counts):
@@ -391,15 +481,15 @@ class Trainer(object):
             return
 
         # Get class names from dataset config
-        if hasattr(self.cfg.dataset, 'class_name'):
+        if hasattr(self.cfg.dataset, "class_name"):
             class_names = self.cfg.dataset.class_name
         else:
             # Fallback to KITTI class names
-            class_names = ['Car', 'Pedestrian', 'Cyclist']
+            class_names = ["Car", "Pedestrian", "Cyclist"]
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print(f"Per-Class Loss Summary (Epoch {self.epoch})")
-        print("="*80)
+        print("=" * 80)
 
         # for class_id in sorted(per_class_losses.keys()):
         #     count = per_class_counts[class_id]
@@ -421,4 +511,4 @@ class Trainer(object):
         #     self.fabric.log(f"train_per_class/{class_name}/angle", avg_angle_loss, step=self.state.global_step)
         #     self.fabric.log(f"train_per_class/{class_name}/count", count, step=self.state.global_step)
 
-        print("="*80 + "\n")
+        print("=" * 80 + "\n")
