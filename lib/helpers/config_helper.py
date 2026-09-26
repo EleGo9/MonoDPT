@@ -143,6 +143,7 @@ class OptimizerConfig(BaseModel):
 class LRSchedulerConfig(BaseModel):
     warmup: Union[Literal['linear', 'cos'], None]
     decay: Union[Literal['cos', 'poly', 'step'], None]
+    power: Optional[float] = None
     warmup_epochs: Optional[int] = None
     warmup_init_lr: Optional[float] = None
     decay_rate: Optional[float] = None
@@ -157,6 +158,11 @@ class LRSchedulerConfig(BaseModel):
     def validate_scheduler_config(cls, values):
         warmup = values.get("warmup")
         decay = values.get("decay")
+        power = values.get("power")
+        
+        if decay == "poly":
+            if power is None:
+                raise ValueError("`power` is required for polynomial decay.")
 
         # --- Warmup checks ---
         if warmup is not None:

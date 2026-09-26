@@ -75,11 +75,15 @@ def build_lr_scheduler(
         def make_poly_lambda(base_lr):
             def lr_lambda(step):
                 if step <= warmup_steps:
+                    # Linear warmup
                     progress = step / warmup_steps if warmup_steps else 1.0
                     absolute_lr = init_lr + (base_lr - init_lr) * progress
                 else:
+                    # Polynomial decay
+
+                    # clamped progress between 0 and 1
                     progress = min(max((step - warmup_steps) / decay_steps, 0.0), 1.0)
-                    absolute_lr = min_lr + (base_lr - min_lr) * (1.0 - progress) ** 0.9
+                    absolute_lr = min_lr + (base_lr - min_lr) * (1.0 - progress) ** cfg.lr_scheduler.power
                 return absolute_lr / base_lr
 
             return lr_lambda
@@ -142,12 +146,14 @@ class WarmupThenScheduler(lr_sched._LRScheduler):
         current_step = self.last_epoch + 1 if epoch is None else epoch
 
         if self.warmup_scheduler and current_step <= self.num_warmup:
+            # Warmup phase: step the warmup scheduler
             self.warmup_scheduler.last_epoch = current_step
             self.warmup_scheduler.step()
             self.finished_warmup = False
         else:
+            # Decay phase: step the main scheduler
             if not self.finished_warmup:
-                # Sync main scheduler with warmup boundary
+                # Sync main scheduler with warmup boundary (pytorch schedulers update last_epoch before computing lr)
                 self.main_scheduler.last_epoch = current_step - 1
                 self.finished_warmup = True
             self.main_scheduler.step()
@@ -322,28 +328,48 @@ if __name__ == "__main__":
     import torch.optim as optim
     import matplotlib.pyplot as plt
     import math
+    import os
     from omegaconf import OmegaConf
+    from lib.helpers.config_helper import Config
+    import argparse
+    from lib.helpers.optimizer_helper import AdamW, get_paramgroups_monodpt_classic
+
+    parser = argparse.ArgumentParser(
+        description="Monocular 3D Object Detection with Decoupled-Query and Geometry-Error Priors"
+    )
+    parser.add_argument(
+        "--config",
+        dest="config",
+        help="settings of detection in yaml format",
+        default="configs/monodpt.yaml",
+    )
+    args = parser.parse_args()
+
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"Configuration file not found: {args.config}")
 
     # Build Configuration Object
-    config_file = OmegaConf.load("../../configs/monodpt.yaml")
+    config_file = OmegaConf.load(args.config)
     cfg = Config(**config_file)
 
     # Dummy optimizer
     model = torch.nn.Linear(10, 10)
-    optimizer = optim.SGD(
-        [
-            {
-                "params": [p for n, p in model.named_parameters() if "bias" in n],
-                "lr": 0.1,
-                "lr_scale": 1.0,
-            },  # base group
-            {
-                "params": [p for n, p in model.named_parameters() if "bias" not in n],
-                "lr": 0.1,
-                "lr_scale": 0.5,
-            },  # scaled group
-        ]
-    )
+    # optimizer = optim.SGD(
+    #     [
+    #         {
+    #             "params": [p for n, p in model.named_parameters() if "bias" in n],
+    #             "lr": 0.1,
+    #             "lr_scale": 1.0,
+    #         },  # base group
+    #         {
+    #             "params": [p for n, p in model.named_parameters() if "bias" not in n],
+    #             "lr": 0.1,
+    #             "lr_scale": 0.5,
+    #         },  # scaled group
+    #     ]
+    # )
+    param_groups = get_paramgroups_monodpt_classic(cfg, model)
+    optimizer = optimizer = AdamW(param_groups, lr=cfg.optimizer.lr)
 
     # -------------------------------------------------------------------
     # Build scheduler
@@ -375,8 +401,14 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------
     # Plot
     plt.figure(figsize=(8, 4))
-    plt.plot(lrs_group0, label="Group 0 (scale=1.0)")
-    plt.plot(lrs_group1, label="Group 1 (scale=0.5)")
+    plt.plot(
+        lrs_group0,
+        label=f"Group 0 (scale={optimizer.param_groups[0].get('lr_scale', 1.0)})",
+    )
+    plt.plot(
+        lrs_group1,
+        label=f"Group 1 (scale={optimizer.param_groups[1].get('lr_scale', 1.0)})",
+    )
     plt.xlabel("Epoch")
     plt.ylabel("Learning Rate")
     plt.title("LR Schedule with Per-Group Scaling")

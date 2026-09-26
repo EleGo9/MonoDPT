@@ -122,13 +122,14 @@ optimizer:
 
 
 lr_scheduler:
-  decay: 'poly'  # 'step', 'cos' or None
+  decay: 'poly'  # 'step', 'cos', 'poly' or None
   warmup: 'linear'  # 'linear', 'cos', or None
-  #decay_rate: 0.5 # only for 'step' decay
-  #decay_list: [85, 125, 165, 205] # only for 'step' decay
+  power: 0.9  # only for 'poly' decay
+  # decay_rate: 0.5 # only for 'step' decay
+  # decay_list: [85, 125, 165, 205] # only for 'step' decay
   warmup_epochs: 5
-  warmup_init_lr: 1.0e-06
-  min_decay_lr: 1.0e-06
+  warmup_init_lr: 1.0e-06 # absolute value
+  min_decay_lr: 1.0e-06 # absolute value
 
 
 trainer:
