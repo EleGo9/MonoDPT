@@ -237,6 +237,13 @@ class Tester(object):
         print(f"==> Evaluating live model checksum: {checksum_before:.9e}")
         print(f"==> Prediction output directory: {self.outputs_dir}")
 
+        if self.rank_zero:
+            import shutil
+            if self.outputs_dir.exists():
+                shutil.rmtree(self.outputs_dir)
+            self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.fabric.barrier()
+
         local_results = {}
         model_infer_time = 0.0
 
