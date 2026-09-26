@@ -234,7 +234,7 @@ class Tester(object):
         torch.set_grad_enabled(False)
         self.model.eval()
         checksum_before = self._model_checksum()
-        print(f"==> Evaluating live model checksum: {checksum_before:.9e}")
+        print(f"==> Evaluating live model checksum: {checksum_before}")
         print(f"==> Prediction output directory: {self.outputs_dir}")
 
         if self.rank_zero:
