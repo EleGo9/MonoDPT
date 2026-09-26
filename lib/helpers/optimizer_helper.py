@@ -5,34 +5,51 @@ from torch.optim.optimizer import Optimizer
 
 from lib.helpers.config_helper import Config, BackboneType
 
+
 def get_paramgroups_monodpt_resnet(cfg, model):
     weights, biases = [], []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
 
-        if 'bias' in name:
+        if "bias" in name:
             biases += [param]
         else:
             weights += [param]
 
     param_groups = [
-        {'name': 'biases', 'params': biases, 'weight_decay': 0},
-        {'name': 'weights', 'params': weights, 'weight_decay': cfg.optimizer.weight_decay}
+        {"name": "biases", "params": biases, "weight_decay": 0},
+        {
+            "name": "weights",
+            "params": weights,
+            "weight_decay": cfg.optimizer.weight_decay,
+        },
     ]  # mod, added "name" field
     return param_groups
+
 
 def get_paramgroups_monodpt_classic(cfg, model):
     backbone, other = [], []
     for name, param in model.named_parameters():
-        if 'backbone' in name:
+        if "backbone" in name:
             backbone += [param]
         else:
             other += [param]
     param_groups = [
-        {'name': 'backbone', 'params': backbone, 'lr': cfg.optimizer.lr, 'weight_decay': 0.01, "lr_scale": 1.0},
-        {'name': 'default', 'params': other, 'lr': cfg.optimizer.lr, 'weight_decay': cfg.optimizer.weight_decay,
-         "lr_scale": 10.0}
+        {
+            "name": "backbone",
+            "params": backbone,
+            "lr": cfg.optimizer.lr,
+            "weight_decay": 0.01,
+            "lr_scale": 1.0,
+        },
+        {
+            "name": "default",
+            "params": other,
+            "lr": cfg.optimizer.lr,
+            "weight_decay": cfg.optimizer.weight_decay,
+            "lr_scale": 10.0,
+        },
     ]
 
     return param_groups
@@ -64,9 +81,7 @@ def get_paramgroups_monodpt(cfg, model):
 
     param_groups = {}
     num_layers = len(model.backbone[0].backbone.blocks)
-    layer_scales = list(
-        layer_decay ** (num_layers - i) for i in range(num_layers + 1)
-    )
+    layer_scales = list(layer_decay ** (num_layers - i) for i in range(num_layers + 1))
 
     no_weight_decay = [
         "backbone.0.backbone.pos_embed",
@@ -115,7 +130,7 @@ def get_paramgroups_monodpt(cfg, model):
                 g_decay = "decay"
                 this_decay = cfg.optimizer.weight_decay
 
-            group_name = f"dtp_head_{g_decay}"
+            group_name = f"dpt_head_{g_decay}"
             this_scale = 1.0
 
         else:
@@ -141,6 +156,7 @@ def get_paramgroups_monodpt(cfg, model):
 
     return list(param_groups.values())
 
+
 def build_optimizer(cfg: Config, model):
 
     # todo: fare meglio
@@ -149,13 +165,13 @@ def build_optimizer(cfg: Config, model):
     else:
         param_groups = get_paramgroups_monodpt(cfg, model)
 
-    if cfg.optimizer.type == 'sgd':
+    if cfg.optimizer.type == "sgd":
         optimizer = optim.SGD(param_groups, lr=cfg.optimizer.lr, momentum=0.9)
-    elif cfg.optimizer.type == 'adam':
+    elif cfg.optimizer.type == "adam":
         optimizer = optim.Adam(param_groups, lr=cfg.optimizer.lr)
-    elif cfg.optimizer.type == 'adamw':
+    elif cfg.optimizer.type == "adamw":
         optimizer = AdamW(param_groups, lr=cfg.optimizer.lr)
-    #elif cfg.optimizer.type == 'adamw_depthany':
+    # elif cfg.optimizer.type == 'adamw_depthany':
     #    optimizer = AdamW(param_groups, lr=cfg.optimizer.lr, betas=(0.9, 0.999), weight_decay=0.01)
     else:
         raise NotImplementedError("%s optimizer is not supported" % cfg.optimizer.type)
@@ -183,8 +199,15 @@ class AdamW(Optimizer):
         https://openreview.net/forum?id=ryQu7f-RZ
     """
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0, amsgrad=False):
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0,
+        amsgrad=False,
+    ):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -193,14 +216,15 @@ class AdamW(Optimizer):
             raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
-        defaults = dict(lr=lr, betas=betas, eps=eps,
-                        weight_decay=weight_decay, amsgrad=amsgrad)
+        defaults = dict(
+            lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad
+        )
         super(AdamW, self).__init__(params, defaults)
 
     def __setstate__(self, state):
         super(AdamW, self).__setstate__(state)
         for group in self.param_groups:
-            group.setdefault('amsgrad', False)
+            group.setdefault("amsgrad", False)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -215,33 +239,35 @@ class AdamW(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            for p in group['params']:
+            for p in group["params"]:
                 if p.grad is None:
                     continue
                 grad = p.grad
                 if grad.is_sparse:
-                    raise RuntimeError('Adam does not support sparse gradients, please consider SparseAdam instead')
-                amsgrad = group['amsgrad']
+                    raise RuntimeError(
+                        "Adam does not support sparse gradients, please consider SparseAdam instead"
+                    )
+                amsgrad = group["amsgrad"]
 
                 state = self.state[p]
 
                 # State initialization
                 if len(state) == 0:
-                    state['step'] = 0
+                    state["step"] = 0
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p)
+                    state["exp_avg"] = torch.zeros_like(p)
                     # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
                     if amsgrad:
                         # Maintains max of all exp. moving avg. of sq. grad. values
-                        state['max_exp_avg_sq'] = torch.zeros_like(p)
+                        state["max_exp_avg_sq"] = torch.zeros_like(p)
 
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 if amsgrad:
-                    max_exp_avg_sq = state['max_exp_avg_sq']
-                beta1, beta2 = group['betas']
+                    max_exp_avg_sq = state["max_exp_avg_sq"]
+                beta1, beta2 = group["betas"]
 
-                state['step'] += 1
+                state["step"] += 1
 
                 # if group['weight_decay'] != 0:
                 #     grad = grad.add(group['weight_decay'], p.data)
@@ -253,15 +279,15 @@ class AdamW(Optimizer):
                     # Maintains the maximum of all 2nd moment running avg. till now
                     torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
                     # Use the max. for normalizing running avg. of gradient
-                    denom = max_exp_avg_sq.sqrt().add_(group['eps'])
+                    denom = max_exp_avg_sq.sqrt().add_(group["eps"])
                 else:
-                    denom = exp_avg_sq.sqrt().add_(group['eps'])
+                    denom = exp_avg_sq.sqrt().add_(group["eps"])
 
-                bias_correction1 = 1 - beta1 ** state['step']
-                bias_correction2 = 1 - beta2 ** state['step']
-                step_size = group['lr'] * math.sqrt(bias_correction2) / bias_correction1
+                bias_correction1 = 1 - beta1 ** state["step"]
+                bias_correction2 = 1 - beta2 ** state["step"]
+                step_size = group["lr"] * math.sqrt(bias_correction2) / bias_correction1
 
-                update = torch.mul(p, group['weight_decay']).addcdiv_(
+                update = torch.mul(p, group["weight_decay"]).addcdiv_(
                     exp_avg, denom, value=1
                 )
                 p.add_(update, alpha=-step_size)
