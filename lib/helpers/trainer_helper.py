@@ -235,6 +235,7 @@ class Trainer(object):
     def train_one_epoch(self, epoch):
         torch.set_grad_enabled(True)
         self.model.train()
+        self.optimizer.zero_grad()
         self.fabric.log("epoch", epoch, step=self.state.global_step)
 
         progress_bar = tqdm.tqdm(
@@ -253,7 +254,10 @@ class Trainer(object):
 
             # compute next iteration and accumulation step (avoid off-by-one)
             next_iter = self.state.global_iteration + 1
-            is_step = (next_iter) % self.cfg.trainer.accum_iter == 0
+            is_accumulation_boundary = (batch_idx + 1) % self.cfg.trainer.accum_iter == 0
+            is_last_batch = batch_idx == len(self.train_loader) - 1
+            is_step = is_accumulation_boundary or is_last_batch
+            accumulation_count = ((batch_idx % self.cfg.trainer.accum_iter) + 1)
             if is_step:
                 self.state.global_step += 1
                 self.fabric.log(
@@ -333,6 +337,13 @@ class Trainer(object):
 
             if is_step:
                 # update optimizer
+                if is_last_batch and not is_accumulation_boundary:
+                    # The loss is scaled by accum_iter above. Rescale a short
+                    # final accumulation to have the same mean-loss magnitude.
+                    for parameter in self.model.parameters():
+                        if parameter.grad is not None:
+                            parameter.grad.mul_(self.cfg.trainer.accum_iter / accumulation_count)
+
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
