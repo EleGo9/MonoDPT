@@ -512,7 +512,7 @@ class Tester(object):
                     class_name = self.class_name[int(results[orig_ds][img_id][i][0])]
                     f.write('{} 0.0 0'.format(class_name))
                     for j in range(1, len(results[orig_ds][img_id][i])):
-                        f.write(' {:.2f}'.format(results[orig_ds][img_id][i][j]))
+                        f.write(' {:.4f}'.format(results[orig_ds][img_id][i][j]))
                     f.write('\n')
                 f.close()
                 total_files_saved += 1
