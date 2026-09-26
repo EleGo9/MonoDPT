@@ -234,7 +234,7 @@ class Tester(object):
         torch.set_grad_enabled(False)
         self.model.eval()
         checksum_before = self._model_checksum()
-        print(f"==> Evaluating live model checksum: {checksum_before:.9e}")
+        print(f"==> Evaluating live model checksum: {checksum_before}")
         print(f"==> Prediction output directory: {self.outputs_dir}")
 
         if self.rank_zero:
@@ -408,7 +408,7 @@ class Tester(object):
         # print(local_results.keys())
         self.save_results(local_results)
         checksum_after = self._model_checksum()
-        print(f"==> Live model checksum after evaluation: {checksum_after:.9e}")
+        print(f"==> Live model checksum after evaluation: {checksum_after}")
         if step is not None:
             self.fabric.log("debug/eval_model_checksum_before", checksum_before, step=step)
             self.fabric.log("debug/eval_model_checksum_after", checksum_after, step=step)
