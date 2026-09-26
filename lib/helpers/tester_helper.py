@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import tqdm
 import shutil
 from pathlib import Path
@@ -232,6 +233,9 @@ class Tester(object):
 
         torch.set_grad_enabled(False)
         self.model.eval()
+        checksum_before = self._model_checksum()
+        print(f"==> Evaluating live model checksum: {checksum_before:.9e}")
+        print(f"==> Prediction output directory: {self.outputs_dir}")
 
         local_results = {}
         model_infer_time = 0.0
@@ -396,6 +400,20 @@ class Tester(object):
         print('==> Saving ...')
         # print(local_results.keys())
         self.save_results(local_results)
+        checksum_after = self._model_checksum()
+        print(f"==> Live model checksum after evaluation: {checksum_after:.9e}")
+        if step is not None:
+            self.fabric.log("debug/eval_model_checksum_before", checksum_before, step=step)
+            self.fabric.log("debug/eval_model_checksum_after", checksum_after, step=step)
+
+    def _model_checksum(self):
+        h = hashlib.sha256()
+
+        for parameter in self.model.parameters():
+            tensor = parameter.detach().float().cpu().contiguous()
+            h.update(tensor.numpy().tobytes())
+
+        return h.hexdigest()[:16]
 
     def should_log_images(self, batch_idx, step):
         rank_zero = self.fabric.is_global_zero
@@ -500,6 +518,17 @@ class Tester(object):
                 total_files_saved += 1
 
         print(f'DEBUG: Saved {total_files_saved} files total ({empty_files_saved} were empty - no detections)')
+        prediction_checksum = self._prediction_checksum(output_dir)
+        print(f"DEBUG: Prediction checksum: {prediction_checksum}")
+
+    def _prediction_checksum(self, output_dir):
+        h = hashlib.sha256()
+
+        for path in sorted(output_dir.rglob("*.txt")):
+            h.update(str(path.relative_to(output_dir)).encode())
+            h.update(path.read_bytes())
+
+        return h.hexdigest()[:16]
 
     def evaluate(self):
         self.fabric.barrier()

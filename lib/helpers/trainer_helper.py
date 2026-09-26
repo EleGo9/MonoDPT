@@ -52,6 +52,12 @@ class Trainer(object):
         self.model_name = model_name
         self.checkpoint_dir = checkpoint_dir
         self.tester = None
+        self.optimizer_steps = 0
+        self.trainable_parameter_name, self.trainable_parameter = next(
+            (name, parameter)
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad
+        )
 
         if cfg.trainer.depthany_model is not None:
             assert cfg.trainer.depthany_model.is_file()
@@ -194,6 +200,8 @@ class Trainer(object):
                         cur_result_3d = cur_result
                         cur_result_2d = None
 
+                    self.fabric.log("epoch", float(self.epoch), step=self.state.global_step)
+
                     if self.rank_zero and metric_value > best_result:
                         best_result = metric_value
                         best_epoch = self.epoch
@@ -262,6 +270,9 @@ class Trainer(object):
                 self.state.global_step += 1
                 self.fabric.log(
                     "global_step", self.state.global_step, step=self.state.global_step
+                )
+                self.fabric.log(
+                    "epoch", epoch + (batch_idx + 1) / len(self.train_loader), step=self.state.global_step
                 )
 
             # update the stored iteration
@@ -344,7 +355,40 @@ class Trainer(object):
                         if parameter.grad is not None:
                             parameter.grad.mul_(self.cfg.trainer.accum_iter / accumulation_count)
 
+                before = {
+                    name: parameter.detach().clone()
+                    for name, parameter in self.model.named_parameters()
+                    if parameter.requires_grad
+                }
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_norm=float("inf")
+                )
+                amp_scale_before = self._amp_scale()
+                optimizer_state_step_before = self._optimizer_state_step()
                 self.optimizer.step()
+                param_delta_sq = 0.0
+                for name, parameter in self.model.named_parameters():
+                    if parameter.requires_grad:
+                        delta = parameter.detach() - before[name]
+                        param_delta_sq += delta.float().pow(2).sum().item()
+
+                param_delta_l2 = param_delta_sq ** 0.5
+                amp_scale_after = self._amp_scale()
+                optimizer_state_step_after = self._optimizer_state_step()
+                optimizer_step_skipped = (
+                    optimizer_state_step_before is not None
+                    and optimizer_state_step_after is not None
+                    and optimizer_state_step_after <= optimizer_state_step_before
+                )
+                if amp_scale_before is not None and amp_scale_after < amp_scale_before:
+                    optimizer_step_skipped = True
+                self.optimizer_steps += 1
+                self.fabric.log("debug/optimizer_steps", self.optimizer_steps, step=self.state.global_step)
+                self.fabric.log("debug/param_delta_l2", param_delta_l2, step=self.state.global_step)
+                self.fabric.log("debug/grad_norm", grad_norm.item(), step=self.state.global_step)
+                self.fabric.log("debug/optimizer_step_skipped", int(optimizer_step_skipped), step=self.state.global_step)
+                if amp_scale_before is not None:
+                    self.fabric.log("debug/amp_scale", amp_scale_after, step=self.state.global_step)
                 self.optimizer.zero_grad()
 
                 # update learning rate
@@ -369,10 +413,26 @@ class Trainer(object):
             progress_bar.update()
             # if batch_idx>10:
             #     break
-        progress_bar.close()
-
         # Log per-class losses at end of epoch
         self._log_per_class_losses(per_class_losses, per_class_counts)
+        progress_bar.close()
+
+    def _amp_scale(self):
+        """Return Fabric's GradScaler scale when mixed precision exposes one."""
+        precision = getattr(getattr(self.fabric, "_strategy", None), "precision", None)
+        scaler = getattr(precision, "scaler", None)
+        if scaler is None:
+            scaler = getattr(getattr(self.fabric, "_precision", None), "scaler", None)
+        return scaler.get_scale() if scaler is not None else None
+
+    def _optimizer_state_step(self):
+        """Return the largest optimizer state step, if the optimizer tracks one."""
+        state_steps = []
+        for state in self.optimizer.state.values():
+            step = state.get("step")
+            if step is not None:
+                state_steps.append(float(step.item() if torch.is_tensor(step) else step))
+        return max(state_steps) if state_steps else None
 
     def prepare_targets(self, targets, batch_size):
         targets_list = []
