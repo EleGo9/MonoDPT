@@ -256,7 +256,9 @@ class Trainer(object):
             is_step = (next_iter) % self.cfg.trainer.accum_iter == 0
             if is_step:
                 self.state.global_step += 1
-                self.fabric.log("global_step", self.state.global_step)
+                self.fabric.log(
+                    "global_step", self.state.global_step, step=self.state.global_step
+                )
 
             # update the stored iteration
             self.state.global_iteration = next_iter
