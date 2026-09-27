@@ -89,7 +89,7 @@ def main():
     if fabric.is_global_zero:
         checkpoint_dir = cfg.logdir / logger.experiment.name / "checkpoints"
         outputs_dir = cfg.logdir / logger.experiment.name / "outputs"
-        logger.experiment.config.update(cfg.model_dump())
+        logger.experiment.config.update(cfg.model_dump(), allow_val_change=True)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         printModelParamCounts(model, logger.experiment.name)
 
