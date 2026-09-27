@@ -151,5 +151,5 @@ tester:
   type: *dataset_type
   mode: single  # 'single' or 'all'; 'all' to evaluate all ckpts in the folder
   checkpoint: 195  # the start ckpt epoch for 'all'
-  threshold: 0.0  # confidence filter (DEFAULT: 0.2, 0.0 ONLY DEBUG)
+  threshold: 0.2  # confidence filter (DEFAULT: 0.2, 0.0 ONLY DEBUG)
   topk: 50
