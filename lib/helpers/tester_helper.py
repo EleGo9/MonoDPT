@@ -384,35 +384,21 @@ class Tester(object):
                         p[3] = (p[3] - pad_h) / s  # y1
                         p[4] = (p[4] - pad_w) / s  # x2
                         p[5] = (p[5] - pad_h) / s  # y2
-                        x3d_orig = np.array((p[2] + p[4]) / 2)
-                        y3d_orig = np.array((p[3] + p[5]) / 2) # Or use p[5] if location is at the bottom
                         
-                        depth = np.array(p[11]) # Depth (Z) remains unchanged by resolution)p[11] # Depth (Z) remains unchanged by resolution
-                        
-                        # Use the original calibration to get metric X, Y, Z
-                        # .reshape(-1) ensures we get a flat [X, Y, Z] array
-                        new_locs = original_calibs[i].img_to_rect(x3d_orig, y3d_orig, depth).reshape(-1)
-                        
-                        # KITTI 'y' location is typically the center of the object. 
-                        # If your model predicts the bottom-face center, add half height back:
-                        new_locs[1] += p[6] / 2 
-                        
-                        p[9] = new_locs[0]  # Corrected X (meters)
-                        p[10] = new_locs[1] # Corrected Y (meters)
-                        p[11] = new_locs[2] # Corrected Z (meters)
-
-                        # Recalculate ry using original calibration and original x-coordinate
-                        # ry depends on the calibration parameters (cu, fu) and the pixel position
-                        alpha = p[1]
-                        ry_corrected = original_calibs[i].alpha2ry(alpha, x3d_orig)
-                        p[12] = ry_corrected
+                        # 3. 3D Coordinates (X, Y, Z) and Rotation (ry)
+                        # CRITICAL FIX: The network predicts X, Y, Z in physical meters relative to the camera.
+                        # Since decode_detections unprojects the points using the appropriately scaled calibration
+                        # matrix (calibs_for_decode), the resulting coordinates p[9:12] and p[12] (ry) are ALREADY
+                        # perfectly correct in the physical 3D world! 
+                        # We must NOT overwrite them using the 2D bounding box center, which ruins the 3D projection!
 
                         # diagnostics checks
+                        depth = np.array(p[11])
                         if not np.isfinite(depth) or np.isnan(depth):
                             diag_pred_invalid_depth += 1
                         if depth > getattr(self.dataloader.dataset, 'depth_threshold', 1000) or depth < 0:
                             diag_pred_outside_depth += 1
-                        if not np.all(np.isfinite(new_locs)) or not np.all(np.isfinite(p[6:9])):
+                        if not np.all(np.isfinite(p[9:12])) or not np.all(np.isfinite(p[6:9])):
                             diag_pred_invalid_geom += 1
 
                         new_preds.append(p)
