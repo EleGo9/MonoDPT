@@ -247,7 +247,7 @@ class Custom_Dataset(data.Dataset):
                 print('==> Evaluating (official) ...')
 
             car_moderate = 0
-            results_str, results_dict = get_indy_eval_result(gt_annos, dt_annos, self.writelist, max_depth= self.depth_threshold, iou_thres=0.7)
+            results_str, results_dict = get_indy_eval_result(gt_annos, dt_annos, self.writelist, max_depth= self.depth_threshold, iou_thres=getattr(self.cfg.dataset, "iou_thres", 0.5))
 
             if logger is not None:
                 logger.info(results_str)

@@ -25,6 +25,7 @@ dataset:
   writelist: ['Car']
   clip_2d: False
   depth_threshold: 120
+  iou_thres: 0.5
   distortion: False
 
   class_name: ['Car']
