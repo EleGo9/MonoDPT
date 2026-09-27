@@ -521,9 +521,11 @@ class Tester(object):
 
             print(dump_text)
             
-            # Save dump to JSON file
+            # Save dump to JSON file in a persistent directory (outputs_dir gets wiped every eval)
             step_val = step if step is not None else 0
-            json_path = self.outputs_dir / f"eval_diagnostics_step_{step_val}.json"
+            diag_dir = self.outputs_dir.parent / "diagnostics"
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            json_path = diag_dir / f"eval_diagnostics_step_{step_val}.json"
             with open(json_path, 'w') as f:
                 json.dump(dump_data, f, indent=4)
                 
