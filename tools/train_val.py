@@ -87,8 +87,22 @@ def main():
     logger.watch(model)
 
     if fabric.is_global_zero:
-        checkpoint_dir = cfg.logdir / logger.experiment.name / "checkpoints"
-        outputs_dir = cfg.logdir / logger.experiment.name / "outputs"
+        run_name = logger.experiment.name
+        if run_name is None:
+            if cfg.trainer.resume_model is not None:
+                run_name = cfg.trainer.resume_model
+            elif hasattr(logger.experiment, "id") and logger.experiment.id is not None:
+                run_name = logger.experiment.id
+            else:
+                run_name = "offline_run"
+                
+        # If evaluate only and resuming, use the resume model's dir directly
+        if args.evaluate_only and cfg.trainer.resume_model is not None:
+            run_name = str(cfg.trainer.resume_model)
+
+        checkpoint_dir = cfg.logdir / run_name / "checkpoints"
+        outputs_dir = cfg.logdir / run_name / "outputs"
+
         logger.experiment.config.update(cfg.model_dump(), allow_val_change=True)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         printModelParamCounts(model, logger.experiment.name)
