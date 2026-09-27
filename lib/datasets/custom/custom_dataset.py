@@ -474,6 +474,12 @@ class Custom_Dataset(data.Dataset):
 
         obj_region = np.zeros((img.shape[1], img.shape[2]), dtype=bool) # (H, W)
 
+        # Dataset statistics for evaluation diagnostics
+        stat_gt_cars = sum(1 for obj in objects if obj.cls_type == 'Car')
+        stat_removed_by_depth = 0
+        stat_rejected_proj = 0
+        stat_skipped_encoding = 0
+
         object_num = len(objects) if len(objects) < self.max_objs else self.max_objs
         
         for i in range(object_num):
@@ -487,6 +493,8 @@ class Custom_Dataset(data.Dataset):
             
             # ignore the samples beyond the threshold
             if objects[i].pos[-1] > self.depth_threshold:
+                if objects[i].cls_type in self.writelist:
+                    stat_removed_by_depth += 1
                 # print('Too far:', objects[i].pos[-1])
                 continue
 
@@ -535,6 +543,7 @@ class Custom_Dataset(data.Dataset):
                 proj_inside_img = False
 
             if proj_inside_img == False:
+                stat_rejected_proj += 1
                 # print('proj outside img')
                 # print(index)
                 # print('-----------------------')
@@ -574,6 +583,7 @@ class Custom_Dataset(data.Dataset):
                     t = np.clip(t, 0, 1)
                     b = np.clip(b, 0, 1)
                 else:
+                    stat_skipped_encoding += 1
                     continue		
 
             boxes[i] = center_2d_norm[0], center_2d_norm[1], size_2d_norm[0], size_2d_norm[1]
@@ -767,7 +777,11 @@ class Custom_Dataset(data.Dataset):
                 'pad_w': pad_w,
                 'pad_h': pad_h,
                 'bbox_downsample_ratio': self.resolution / features_size,
-                'orig_ds': orig_ds}
+                'orig_ds': orig_ds,
+                'stat_gt_cars': stat_gt_cars,
+                'stat_removed_by_depth': stat_removed_by_depth,
+                'stat_rejected_proj': stat_rejected_proj,
+                'stat_skipped_encoding': stat_skipped_encoding}
         # print('targets',targets.keys())
         if DEBUG:
             from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh, box_cxcylrtb_to_xyxy

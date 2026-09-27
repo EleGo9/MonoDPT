@@ -254,7 +254,24 @@ class Tester(object):
             desc="Evaluation Progress"
         )
 
+        # Validation diagnostics accumulators
+        diag_val_images = 0
+        diag_gt_cars = 0
+        diag_removed_by_depth = 0
+        diag_rejected_proj = 0
+        diag_skipped_encoding = 0
 
+        diag_pred_decoded = 0
+        diag_pred_surviving_conf = 0
+        diag_pred_written = 0
+        diag_pred_invalid_depth = 0
+        diag_pred_outside_depth = 0
+        diag_pred_invalid_geom = 0
+        
+        diag_ordered_img_ids = []
+        
+        # We will keep a representative prediction dump for the first 3 images
+        diag_dump_images = {}
         for batch_idx, (inputs, calibs, targets, info) in enumerate(self.dataloader):
 
             img_sizes = info['img_size']
@@ -274,6 +291,18 @@ class Tester(object):
                 for key, val in info.items()
             }
             # print(info.keys())
+            
+            # accumulate GT stats
+            batch_size = len(info['img_id'])
+            diag_val_images += batch_size
+            diag_gt_cars += int(np.sum(info.get('stat_gt_cars', [0])))
+            diag_removed_by_depth += int(np.sum(info.get('stat_removed_by_depth', [0])))
+            diag_rejected_proj += int(np.sum(info.get('stat_rejected_proj', [0])))
+            diag_skipped_encoding += int(np.sum(info.get('stat_skipped_encoding', [0])))
+            for img_id in info['img_id']:
+                diag_ordered_img_ids.append(int(img_id))
+
+            diag_pred_decoded += batch_size * dets.shape[1]
 
             # Get original calibrations (before letterbox adjustments)
             original_calibs = [self.dataloader.dataset.get_calib(index) for index in info['img_id']]
@@ -337,6 +366,11 @@ class Tester(object):
                     if orig_ds not in corrected_decoded:
                         corrected_decoded[orig_ds] = {}
                     preds = decoded.get(img_id, [])
+                    diag_pred_surviving_conf += len(preds)
+                    
+                    if len(diag_dump_images) < 3 and img_id not in diag_dump_images:
+                        diag_dump_images[img_id] = {'preds': [], 'gt': [], 'calib': original_calibs[i]}
+
                     # print(f"DEBUG: Processing img_id {img_id}: {len(preds)} predictions before correction") 
                     s = info['resize_scale'][i]
                     pad_h = info['pad_h'][i]
@@ -373,8 +407,17 @@ class Tester(object):
                         ry_corrected = original_calibs[i].alpha2ry(alpha, x3d_orig)
                         p[12] = ry_corrected
 
-                        new_preds.append(p)
+                        # diagnostics checks
+                        if not np.isfinite(depth) or np.isnan(depth):
+                            diag_pred_invalid_depth += 1
+                        if depth > getattr(self.dataloader.dataset, 'depth_threshold', 1000) or depth < 0:
+                            diag_pred_outside_depth += 1
+                        if not np.all(np.isfinite(new_locs)) or not np.all(np.isfinite(p[6:9])):
+                            diag_pred_invalid_geom += 1
 
+                        new_preds.append(p)
+                        if img_id in diag_dump_images:
+                            diag_dump_images[img_id]['preds'].append(p)
 
                     corrected_decoded[orig_ds][img_id] = new_preds
                     # print(f"DEBUG: After correction, img_id {img_id} has {len(new_preds)} predictions")
@@ -392,8 +435,24 @@ class Tester(object):
             else:
                 # If no resize, still organize by orig_ds for consistency
                 for i, img_id in enumerate(info['img_id']):
-                    # if img_id in decoded:
                     preds = decoded.get(img_id, [])
+                    diag_pred_surviving_conf += len(preds)
+                    
+                    if len(diag_dump_images) < 3 and img_id not in diag_dump_images:
+                        diag_dump_images[img_id] = {'preds': [], 'gt': [], 'calib': original_calibs[i]}
+
+                    for p in preds:
+                        depth = np.array(p[11])
+                        if not np.isfinite(depth) or np.isnan(depth):
+                            diag_pred_invalid_depth += 1
+                        if depth > getattr(self.dataloader.dataset, 'depth_threshold', 1000) or depth < 0:
+                            diag_pred_outside_depth += 1
+                        if not np.all(np.isfinite(p[9:12])) or not np.all(np.isfinite(p[6:9])):
+                            diag_pred_invalid_geom += 1
+                            
+                        if img_id in diag_dump_images:
+                            diag_dump_images[img_id]['preds'].append(p)
+
                     orig_ds = info['orig_ds'][i]
                     if orig_ds not in local_results:
                         local_results[orig_ds] = {}
@@ -402,6 +461,89 @@ class Tester(object):
             progress_bar.update()
 
         progress_bar.close()
+
+        if self.rank_zero:
+            for ds_name, img_dict in local_results.items():
+                for img_id, preds in img_dict.items():
+                    diag_pred_written += len(preds)
+
+            import json
+            dump_data = []
+            dump_text = ""
+            for img_id, data in diag_dump_images.items():
+                calib = data['calib']
+                
+                img_data = {
+                    'image_id': int(img_id),
+                    'calib': {'fx': float(calib.fu), 'fy': float(calib.fv), 'cx': float(calib.cu), 'cy': float(calib.cv)},
+                    'gt_objects': [],
+                    'predictions': []
+                }
+                
+                dump_text += f"\n--- Image {img_id} ---\n"
+                dump_text += f"Calib: fx={calib.fu:.2f}, fy={calib.fv:.2f}, cx={calib.cu:.2f}, cy={calib.cv:.2f}\n"
+                dump_text += "GT Objects (Car):\n"
+                gt_objects = self.dataloader.dataset.get_label(img_id)
+                for obj in gt_objects:
+                    if obj.cls_type != 'Car': continue
+                    dump_text += f"  2D:[{obj.box2d[0]:.1f}, {obj.box2d[1]:.1f}, {obj.box2d[2]:.1f}, {obj.box2d[3]:.1f}] "
+                    dump_text += f"3D:[{obj.pos[0]:.2f}, {obj.pos[1]:.2f}, {obj.pos[2]:.2f}] "
+                    dump_text += f"Dim:[{obj.h:.2f}, {obj.w:.2f}, {obj.l:.2f}] "
+                    dump_text += f"Depth:{obj.pos[2]:.2f} Alpha:{obj.alpha:.2f} Ry:{obj.ry:.2f}\n"
+                    
+                    img_data['gt_objects'].append({
+                        '2d_bbox': [float(x) for x in obj.box2d],
+                        '3d_pos': [float(x) for x in obj.pos],
+                        'dim_hwl': [float(obj.h), float(obj.w), float(obj.l)],
+                        'depth': float(obj.pos[2]),
+                        'alpha': float(obj.alpha),
+                        'rotation_y': float(obj.ry)
+                    })
+                    
+                dump_text += "Predictions:\n"
+                for p in data['preds']:
+                    dump_text += f"  2D:[{p[2]:.1f}, {p[3]:.1f}, {p[4]:.1f}, {p[5]:.1f}] "
+                    dump_text += f"3D:[{p[9]:.2f}, {p[10]:.2f}, {p[11]:.2f}] "
+                    dump_text += f"Dim:[{p[6]:.2f}, {p[7]:.2f}, {p[8]:.2f}] "
+                    dump_text += f"Depth:{p[11]:.2f} Alpha:{p[1]:.2f} Ry:{p[12]:.2f} Conf:{p[13]:.3f}\n"
+                    
+                    img_data['predictions'].append({
+                        '2d_bbox': [float(p[2]), float(p[3]), float(p[4]), float(p[5])],
+                        '3d_pos': [float(p[9]), float(p[10]), float(p[11])],
+                        'dim_hwl': [float(p[6]), float(p[7]), float(p[8])],
+                        'depth': float(p[11]),
+                        'alpha': float(p[1]),
+                        'rotation_y': float(p[12]),
+                        'confidence': float(p[13])
+                    })
+                
+                dump_data.append(img_data)
+
+            print(dump_text)
+            
+            # Save dump to JSON file
+            step_val = step if step is not None else 0
+            json_path = self.outputs_dir / f"eval_diagnostics_step_{step_val}.json"
+            with open(json_path, 'w') as f:
+                json.dump(dump_data, f, indent=4)
+                
+            # Order-sensitive checksum: sum of (index+1) * img_id
+            order_sensitive_checksum = sum((i + 1) * img_id for i, img_id in enumerate(diag_ordered_img_ids))
+
+            self.fabric.log_dict({
+                "eval_diag/val_images_evaluated": float(diag_val_images),
+                "eval_diag/gt_cars_total_in_file": float(diag_gt_cars),
+                "eval_diag/gt_removed_by_depth_within_max_objs": float(diag_removed_by_depth),
+                "eval_diag/gt_rejected_proj_outside_within_max_objs": float(diag_rejected_proj),
+                "eval_diag/gt_skipped_encoding_within_max_objs": float(diag_skipped_encoding),
+                "eval_diag/pred_raw_from_network": float(diag_pred_decoded),
+                "eval_diag/pred_after_conf_threshold": float(diag_pred_surviving_conf),
+                "eval_diag/pred_written_to_files": float(diag_pred_written),
+                "eval_diag/pred_exhibits_invalid_depth": float(diag_pred_invalid_depth),
+                "eval_diag/pred_exhibits_outside_depth": float(diag_pred_outside_depth),
+                "eval_diag/pred_exhibits_invalid_geometry": float(diag_pred_invalid_geom),
+                "eval_diag/val_images_ordered_checksum": float(order_sensitive_checksum)
+            }, step=step_val)
 
         # save the result for evaluation.
         print('==> Saving ...')
