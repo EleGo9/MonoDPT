@@ -116,7 +116,8 @@ def main():
 
     # build scheduler
     iterations_per_epoch = len(train_loader)
-    steps_per_epoch = iterations_per_epoch // cfg.trainer.accum_iter
+    import math
+    steps_per_epoch = math.ceil(iterations_per_epoch / cfg.trainer.accum_iter)
     lr_scheduler = build_lr_scheduler(cfg, optimizer, max_epochs=cfg.trainer.max_epoch, last_epoch=-1,
                                       steps_per_epoch=steps_per_epoch)
 
