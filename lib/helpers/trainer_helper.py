@@ -444,6 +444,7 @@ class Trainer(object):
             "calibs",
             "depth",
             "size_3d",
+            "src_size_3d",
             "heading_bin",
             "heading_res",
             "boxes_3d",

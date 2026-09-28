@@ -552,11 +552,11 @@ class SetCriterion(nn.Module):
         src_dims = outputs['pred_3d_dim'][idx]
         target_dims = torch.cat([t['size_3d'][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
-        dimension = target_dims.clone().detach()
+        dimension = torch.cat([t['src_size_3d'][i] for t, (_, i) in zip(targets, indices)], dim=0).clone().detach()
         dim_loss = torch.abs(src_dims - target_dims)
         dim_loss /= dimension
         with torch.no_grad():
-            compensation_weight = F.l1_loss(src_dims, target_dims) / dim_loss.mean()
+            compensation_weight = F.l1_loss(src_dims, target_dims) / dim_loss.mean() + 1e-6
         dim_loss *= compensation_weight
         losses = {}
         losses['loss_dim'] = dim_loss.sum() / num_boxes
