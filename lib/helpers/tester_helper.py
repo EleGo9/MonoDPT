@@ -189,21 +189,21 @@ class Tester(object):
             if self.cfg.trainer.save_all:
                 checkpoint_path = self.checkpoint_dir / "checkpoint_epoch_{}.pth".format(self.cfg.tester.checkpoint)
             else:
-                checkpoint_path = Path(self.checkpoint_dir / "checkpoint_best.pth")
+                checkpoint_path = Path(self.checkpoint_dir / "checkpoint_latest.pth")
                 # checkpoint_path =  Path('/media/matte/data/pinim/export_small/logs/worthy-oath-23/checkpoints/checkpoint_best.pth') #
                 
             print("==> Test checkpoint path: {}".format(str(checkpoint_path)))
             assert checkpoint_path.is_file()
 
-            load_checkpoint(
+            _, _, _, trainer_state = load_checkpoint(
                 fabric=self.fabric,
                 model=self.model,
                 optimizer=None,
                 filename=checkpoint_path,
                 logger=None)
 
-            #self.model.to(self.device)
-            self.inference()
+            step = trainer_state.global_step if trainer_state else None
+            self.inference(step=step)
             self.evaluate()
 
         # test all checkpoints in the given dir
@@ -217,15 +217,15 @@ class Tester(object):
             checkpoints_list.sort(key=lambda p: p.stat().st_mtime)
 
             for checkpoint in checkpoints_list:
-                load_checkpoint(
+                _, _, _, trainer_state = load_checkpoint(
                     fabric=self.fabric,
                     model=self.model,
                     optimizer=None,
                     filename=checkpoint,
                     logger=None)
 
-                #self.model.to(self.device)
-                self.inference()
+                step = trainer_state.global_step if trainer_state else None
+                self.inference(step=step)
                 self.evaluate()
 
     def inference(self, step=None):
