@@ -34,7 +34,7 @@ dataset:
   cls2id: {'Car': 0}
   max_objs: 5
 
-  resolution: [1274, 714]
+  resolution: [1274, 392]
   original_resolution: [1280, 720]
   filename_format: ['%06d', '%06d'] # '%015d', '%015d', '%016d']
 
