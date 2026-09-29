@@ -98,7 +98,17 @@ def main():
                 
         # If evaluate only and resuming, use the resume model's dir directly
         if args.evaluate_only and cfg.trainer.resume_model is not None:
-            run_name = str(cfg.trainer.resume_model)
+            resume_str = str(cfg.trainer.resume_model)
+            if resume_str.endswith('.pth'):
+                # It's a file path. Extract the run name from the parent structure if possible,
+                # or just use a generic name for outputs
+                import os
+                if "checkpoints" in resume_str:
+                    run_name = resume_str.split("/checkpoints")[0].split("/")[-1]
+                else:
+                    run_name = os.path.basename(resume_str).replace(".pth", "")
+            else:
+                run_name = resume_str
 
         checkpoint_dir = cfg.logdir / run_name / "checkpoints"
         outputs_dir = cfg.logdir / run_name / "outputs"

@@ -186,11 +186,13 @@ class Tester(object):
 
         # test a single checkpoint
         if self.cfg.tester.mode == 'single' or not self.cfg.trainer.save_all:
-            if self.cfg.trainer.save_all:
+            resume_str = str(self.cfg.trainer.resume_model) if self.cfg.trainer.resume_model else ""
+            if resume_str.endswith('.pth'):
+                checkpoint_path = Path(resume_str)
+            elif self.cfg.trainer.save_all:
                 checkpoint_path = self.checkpoint_dir / "checkpoint_epoch_{}.pth".format(self.cfg.tester.checkpoint)
             else:
-                checkpoint_path = Path(self.checkpoint_dir / "checkpoint_latest.pth")
-                # checkpoint_path =  Path('/media/matte/data/pinim/export_small/logs/worthy-oath-23/checkpoints/checkpoint_best.pth') #
+                checkpoint_path = Path(self.checkpoint_dir / "checkpoint_best.pth")
                 
             print("==> Test checkpoint path: {}".format(str(checkpoint_path)))
             assert checkpoint_path.is_file()

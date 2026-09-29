@@ -87,11 +87,16 @@ class Trainer(object):
             )
 
         if cfg.trainer.resume_model is not None:
-            resume_model_path = (
-                self.cfg.logdir
-                / self.cfg.trainer.resume_model
-                / "checkpoints/checkpoint.pth"
-            )  # todo: put in pydantic
+            resume_str = str(self.cfg.trainer.resume_model)
+            if resume_str.endswith('.pth'):
+                from pathlib import Path
+                resume_model_path = Path(resume_str)
+            else:
+                resume_model_path = (
+                    self.cfg.logdir
+                    / self.cfg.trainer.resume_model
+                    / "checkpoints/checkpoint.pth"
+                )  # todo: put in pydantic
             assert resume_model_path.is_file(), "Resume model checkpoint not found: {}".format(
                 resume_model_path
             )
