@@ -23,6 +23,7 @@ import cv2
 from lib.helpers.visualization import draw_3d_box, draw_transparent_box,draw_2d_boxes, project_3d
 import copy
 from lib.datasets.custom.pd import PhotometricDistort
+from lib.datasets.custom.image_geometry import crop_image, make_image_transform, validate_model_resolution
 from tqdm.auto import tqdm
 
 DEBUG = False
@@ -46,7 +47,8 @@ class Custom_Dataset(data.Dataset):
         self.num_classes = len(self.class_name)
 
         # Configurable resolution (W * H)
-        self.resolution = np.array(cfg.dataset.resolution) # W * H
+        self.resolution = np.asarray(cfg.dataset.resolution, dtype=np.int32) # W * H
+        validate_model_resolution(self.resolution, patch_size=14)
 
         # Configurable max objects
         self.max_objs = cfg.dataset.max_objs
@@ -90,7 +92,11 @@ class Custom_Dataset(data.Dataset):
         self.image_dir = os.path.join(self.root_dir, 'image_2')
         self.calib_dir = os.path.join(self.root_dir, 'calib')
         self.label_dir = os.path.join(self.root_dir, 'label_2')
-        self.original_resolution = cfg.dataset.original_resolution
+        self.original_resolution = np.asarray(cfg.dataset.original_resolution, dtype=np.int32)
+        self.crop_enabled = bool(
+            np.all(self.resolution <= self.original_resolution)
+            and np.any(self.resolution < self.original_resolution)
+        )
         # data augmentation configuration
         self.data_augmentation = True if split in ['train', 'trainval', 'all'] else False
 
@@ -104,6 +110,7 @@ class Custom_Dataset(data.Dataset):
         self.aug_pd = cfg.dataset.aug_pd
         self.aug_crop = cfg.dataset.aug_crop
         self.aug_calib = cfg.dataset.aug_calib
+        self.debug_geometry = bool(getattr(cfg.dataset, "debug_geometry", False))
 
         self.random_flip = cfg.dataset.random_flip
         self.random_crop = cfg.dataset.random_crop
@@ -152,6 +159,8 @@ class Custom_Dataset(data.Dataset):
             objects = self.get_label(index)
             calib = self.get_calib(index)
             has_valid_objects = False
+            image_size = self.get_image(index).size
+            image_transform = make_image_transform(image_size, self.resolution, allow_crop=self.crop_enabled)
             for obj in objects:
                 # Apply the same filtering criteria as in __getitem__
                 # if obj.cls_type not in self.writelist:
@@ -164,15 +173,13 @@ class Custom_Dataset(data.Dataset):
                     # print(obj.pos[-1])
                     continue
                 
-                # Check if the 3D center projects inside the image
-                center_3d = obj.pos + [0, -obj.h / 2, 0]  # real 3D center in 3D space
-                center_3d = center_3d.reshape(-1, 3)  # shape adjustment (N, 3)
-                center_3d, _ = calib.rect_to_img(center_3d)  # project 3D center to image plane
-                center_3d = center_3d[0]  # shape adjustment
-                
-                # Check if the projected center is inside the image
-                if (0 <= center_3d[0] < self.original_resolution[0] and 
-                    0 <= center_3d[1] < self.original_resolution[1]):
+                center_3d = obj.pos + [0, -obj.h / 2, 0]
+                center_3d = center_3d.reshape(-1, 3)
+                center_3d, _ = calib.rect_to_img(center_3d)
+                center_3d = image_transform.transform_points(center_3d)[0]
+
+                if (0 <= center_3d[0] < self.resolution[0] and
+                    0 <= center_3d[1] < self.resolution[1]):
                     has_valid_objects = True
 
                     break
@@ -301,6 +308,60 @@ class Custom_Dataset(data.Dataset):
 
         return img_padded, scale, pad_w, pad_h
 
+    def preprocess_image(self, img):
+        """Crop to the requested size when possible; otherwise keep letterboxing."""
+        image_transform = make_image_transform(img.size, self.resolution, allow_crop=self.crop_enabled)
+        if image_transform.is_crop:
+            img = crop_image(img, image_transform)
+        else:
+            img, _, _, _ = self.letterbox_resize(img, tuple(self.resolution.tolist()))
+        return img, image_transform
+
+    def transform_object_boxes(self, objects, image_transform, flip):
+        """Transform source boxes once and report which crop boxes remain visible."""
+        visible = []
+        for obj in objects:
+            box = image_transform.transform_box(
+                obj.box2d,
+                clip_crop=True,
+                flip=flip,
+            )
+            visible.append(box is not None)
+            obj.box2d = box if box is not None else np.zeros((4,), dtype=np.float32)
+
+            if flip:
+                obj.alpha = np.pi - obj.alpha
+                obj.ry = np.pi - obj.ry
+                if self.aug_calib:
+                    obj.pos[0] *= -1
+                if obj.alpha > np.pi:
+                    obj.alpha -= 2 * np.pi
+                if obj.alpha < -np.pi:
+                    obj.alpha += 2 * np.pi
+                if obj.ry > np.pi:
+                    obj.ry -= 2 * np.pi
+                if obj.ry < -np.pi:
+                    obj.ry += 2 * np.pi
+        return visible
+
+    @staticmethod
+    def debug_check_image_transform(source_calib, transformed_calib, image_transform):
+        """Assert that P2 projection and unprojection follow the image transform."""
+        points_rect = np.array(
+            [[0.5, 0.1, 8.0], [-1.2, -0.4, 14.0], [2.1, 0.7, 32.0]],
+            dtype=np.float32,
+        )
+        source_pixels, _ = source_calib.rect_to_img(points_rect)
+        expected_pixels = image_transform.transform_points(source_pixels)
+        transformed_pixels, _ = transformed_calib.rect_to_img(points_rect)
+        np.testing.assert_allclose(transformed_pixels, expected_pixels, rtol=1e-5, atol=1e-4)
+
+        if source_calib.D is None or not np.any(source_calib.D):
+            recovered = transformed_calib.img_to_rect(
+                transformed_pixels[:, 0], transformed_pixels[:, 1], points_rect[:, 2]
+            )
+            np.testing.assert_allclose(recovered, points_rect, rtol=1e-5, atol=1e-4)
+
     def __getitem__(self, item):
         #  ============================   get inputs   ===========================
         index = int(self.idx_list[item])  # index mapping, get real data id
@@ -308,6 +369,7 @@ class Custom_Dataset(data.Dataset):
         img = self.get_image(index)
         orig_ds = str(self.image_dir.split('/')[-2])
         orig_img_size = np.array(img.size)  # Original size (W, H)
+        crop_before_augmentation = make_image_transform(img.size, self.resolution, allow_crop=self.crop_enabled).is_crop
         features_size = self.resolution // self.downsample    # W * H
 
         # DISABLED: affine transform variables (not used with letterbox resize)
@@ -332,7 +394,10 @@ class Custom_Dataset(data.Dataset):
 
             if np.random.random() < self.random_flip:
                 random_flip_flag = True
-                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                # Cropped images are flipped after cropping so the crop offset
+                # and the transformed labels refer to exactly the same pixels.
+                if not crop_before_augmentation:
+                    img = img.transpose(Image.FLIP_LEFT_RIGHT)
             
             # DISABLED aug_crop: Not compatible with letterbox resize
             # if self.aug_crop:
@@ -359,7 +424,7 @@ class Custom_Dataset(data.Dataset):
                         objects_2 = self.get_label(random_index)
                         if len(objects_1) + len(objects_2) < self.max_objs:
                             random_mix_flag = True
-                            if random_flip_flag == True:
+                            if random_flip_flag and not crop_before_augmentation:
                                 img_temp = img_temp.transpose(Image.FLIP_LEFT_RIGHT)
                             img_blend = Image.blend(img, img_temp, alpha=0.5)
                             img = img_blend
@@ -375,8 +440,14 @@ class Custom_Dataset(data.Dataset):
         # cv2.imshow('img', np.array(img_transform))
         # cv2.waitKey(0)
 
-        # NEW: Letterbox resize (maintains aspect ratio with padding)
-        img, resize_scale, pad_w, pad_h = self.letterbox_resize(img, tuple(self.resolution.tolist()))
+        # Crop and letterbox share one source-to-model image coordinate transform.
+        img, image_transform = self.preprocess_image(img)
+        if random_flip_flag and image_transform.is_crop:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        resize_scale = image_transform.scale
+        # Legacy names are signed affine offsets: negative for crop, positive for pad.
+        pad_w = image_transform.offset_x
+        pad_h = image_transform.offset_y
 
 
         # image encoding
@@ -389,74 +460,38 @@ class Custom_Dataset(data.Dataset):
                 'resize_scale': resize_scale,
                 'pad_w': pad_w,
                 'pad_h': pad_h,
+                'image_offset_x': pad_w,
+                'image_offset_y': pad_h,
+                'crop_x0': image_transform.crop_x0,
+                'crop_y0': image_transform.crop_y0,
+                'crop_width': self.resolution[0] if image_transform.is_crop else 0,
+                'crop_height': self.resolution[1] if image_transform.is_crop else 0,
+                'crop_applied': image_transform.is_crop,
                 'bbox_downsample_ratio': self.resolution / features_size,
                 'orig_ds': orig_ds}
         # print('INFO',info)
 
         if self.split == 'test':
             calib = self.get_calib(index)
-            # Update calibration for letterbox resize
-            calib_updated = copy.deepcopy(calib)
-            calib_updated.cu = calib.cu * resize_scale + pad_w
-            calib_updated.cv = calib.cv * resize_scale + pad_h
-            calib_updated.fu *= resize_scale
-            calib_updated.fv *= resize_scale
-            calib_updated.P2[0, 0] = calib_updated.fu
-            calib_updated.P2[1, 1] = calib_updated.fv
-            calib_updated.P2[0, 2] = calib_updated.cu
-            calib_updated.P2[1, 2] = calib_updated.cv
-            return img, calib_updated.P2, img, info
+            source_calib = copy.deepcopy(calib)
+            calib.apply_image_transform(resize_scale, pad_w, pad_h)
+            if self.debug_geometry:
+                self.debug_check_image_transform(source_calib, calib, image_transform)
+            return img, calib.P2, img, info
 
         #  ============================   get labels   ==============================
         objects = self.get_label(index)
         calib = self.get_calib(index)
 
-        # IMPORTANT: Save original calibration before adjusting
-        # We need the ORIGINAL calibration for projecting 3D centers to image plane
-        # Then we'll manually apply resize/padding to the projected coordinates
-        import copy
-        calib_original = copy.deepcopy(calib)
-
-        # Update calibration for letterbox resize
-        # This adjusted calibration will be passed to the model
-        calib.cu = calib.cu * resize_scale + pad_w
-        calib.cv = calib.cv * resize_scale + pad_h
-        calib.fu *= resize_scale
-        calib.fv *= resize_scale
-        calib.P2[0, 0] = calib.fu
-        calib.P2[1, 1] = calib.fv
-        calib.P2[0, 2] = calib.cu
-        calib.P2[1, 2] = calib.cv
-
-        # data augmentation for labels
-        if random_flip_flag:
-            # Flip after resize
-            if self.aug_calib:
-                calib.flip(self.resolution)
-            for object in objects:
-                # Apply resize first, then flip
-                object.box2d[0] = object.box2d[0] * resize_scale + pad_w
-                object.box2d[1] = object.box2d[1] * resize_scale + pad_h
-                object.box2d[2] = object.box2d[2] * resize_scale + pad_w
-                object.box2d[3] = object.box2d[3] * resize_scale + pad_h
-
-                [x1, y1, x2, y2] = object.box2d
-                object.box2d[0],  object.box2d[2] = self.resolution[0] - x2, self.resolution[0] - x1
-                object.alpha = np.pi - object.alpha
-                object.ry = np.pi - object.ry
-                if self.aug_calib:
-                    object.pos[0] *= -1
-                if object.alpha > np.pi:  object.alpha -= 2 * np.pi  # check range
-                if object.alpha < -np.pi: object.alpha += 2 * np.pi
-                if object.ry > np.pi:  object.ry -= 2 * np.pi
-                if object.ry < -np.pi: object.ry += 2 * np.pi
-        else:
-            # No flip, just apply resize
-            for object in objects:
-                object.box2d[0] = object.box2d[0] * resize_scale + pad_w
-                object.box2d[1] = object.box2d[1] * resize_scale + pad_h
-                object.box2d[2] = object.box2d[2] * resize_scale + pad_w
-                object.box2d[3] = object.box2d[3] * resize_scale + pad_h
+        source_calib = copy.deepcopy(calib)
+        calib.apply_image_transform(resize_scale, pad_w, pad_h)
+        if self.debug_geometry:
+            self.debug_check_image_transform(source_calib, calib, image_transform)
+        if random_flip_flag and self.aug_calib:
+            calib.flip(self.resolution)
+        objects_visible = self.transform_object_boxes(
+            objects, image_transform, flip=random_flip_flag
+        )
 
         # labels encoding
         calibs = np.zeros((self.max_objs, 3, 4), dtype=np.float32)
@@ -483,6 +518,8 @@ class Custom_Dataset(data.Dataset):
         object_num = len(objects) if len(objects) < self.max_objs else self.max_objs
         
         for i in range(object_num):
+            if not objects_visible[i]:
+                continue
             # filter objects by writelist
             if objects[i].cls_type not in self.writelist:
                 # print('!',objects[i].cls_type)
@@ -518,15 +555,16 @@ class Custom_Dataset(data.Dataset):
             center_3d = objects[i].pos + [0, -objects[i].h / 2, 0]  # real 3D center in 3D space
             center_3d = center_3d.reshape(-1, 3)  # shape adjustment (N, 3)
 
-            # CRITICAL FIX: Use ORIGINAL calibration for projection, not adjusted one
-            # This matches the approach in kitti_dataset.py which uses original calib for projection
-            # then applies affine transform. Here we use original calib then apply resize/padding.
-            center_3d, _ = calib_original.rect_to_img(center_3d)  # project 3D center to image plane
-            center_3d = center_3d[0]  # shape adjustment
-
-            # Now apply letterbox resize transformation to the projected coordinates
-            center_3d[0] = center_3d[0] * resize_scale + pad_w
-            center_3d[1] = center_3d[1] * resize_scale + pad_h
+            if image_transform.is_crop:
+                # The transformed calibration maps directly into crop coordinates.
+                center_3d, _ = calib.rect_to_img(center_3d)
+                center_3d = center_3d[0]
+                if random_flip_flag and not self.aug_calib:
+                    center_3d[0] = self.resolution[0] - center_3d[0]
+            else:
+                # Keep the pre-existing center target path when no crop is needed.
+                center_3d, _ = source_calib.rect_to_img(center_3d)
+                center_3d = image_transform.transform_points(center_3d)[0]
 
             # Handle flipping if applied (flip should be applied AFTER resize)
             # DISABLED: Affine transformation (replaced with letterbox resize)
@@ -625,32 +663,14 @@ class Custom_Dataset(data.Dataset):
         if random_mix_flag == True:
             # if False:
                 objects = self.get_label(random_index)
-                # data augmentation for labels
-                if random_flip_flag:
-                    for object in objects:
-                        # Apply resize first
-                        object.box2d[0] = object.box2d[0] * resize_scale + pad_w
-                        object.box2d[1] = object.box2d[1] * resize_scale + pad_h
-                        object.box2d[2] = object.box2d[2] * resize_scale + pad_w
-                        object.box2d[3] = object.box2d[3] * resize_scale + pad_h
-                        # Then flip
-                        [x1, _, x2, _] = object.box2d
-                        object.box2d[0],  object.box2d[2] = self.resolution[0] - x2, self.resolution[0] - x1
-                        object.ry = np.pi - object.ry
-                        if self.aug_calib:
-                            object.pos[0] *= -1
-                        if object.ry > np.pi:  object.ry -= 2 * np.pi
-                        if object.ry < -np.pi: object.ry += 2 * np.pi
-                else:
-                    # No flip, just apply resize
-                    for object in objects:
-                        object.box2d[0] = object.box2d[0] * resize_scale + pad_w
-                        object.box2d[1] = object.box2d[1] * resize_scale + pad_h
-                        object.box2d[2] = object.box2d[2] * resize_scale + pad_w
-                        object.box2d[3] = object.box2d[3] * resize_scale + pad_h
+                objects_temp_visible = self.transform_object_boxes(
+                    objects, image_transform, flip=random_flip_flag
+                )
 
                 object_num_temp = len(objects) if len(objects) < (self.max_objs - object_num) else (self.max_objs - object_num)
                 for i in range(object_num_temp):
+                    if not objects_temp_visible[i]:
+                        continue
                     if objects[i].cls_type not in self.writelist:
                         continue
 
@@ -674,8 +694,10 @@ class Custom_Dataset(data.Dataset):
 
                     center_3d = objects[i].pos + [0, -objects[i].h / 2, 0]  # real 3D center in 3D space
                     center_3d = center_3d.reshape(-1, 3)  # shape adjustment (N, 3)
-                    center_3d, _ = calib.rect_to_img(center_3d)  # project 3D center to image plane
-                    center_3d = center_3d[0]  # shape adjustment
+                    center_3d, _ = calib.rect_to_img(center_3d)
+                    center_3d = center_3d[0]
+                    if image_transform.is_crop and random_flip_flag and not self.aug_calib:
+                        center_3d[0] = self.resolution[0] - center_3d[0]
                     # DISABLED: affine transformation
                     # if random_flip_flag and not self.aug_calib:  # random flip for center3d
                     #     center_3d[0] = orig_img_size[0] - center_3d[0]
@@ -776,6 +798,13 @@ class Custom_Dataset(data.Dataset):
                 'resize_scale': resize_scale,
                 'pad_w': pad_w,
                 'pad_h': pad_h,
+                'image_offset_x': pad_w,
+                'image_offset_y': pad_h,
+                'crop_x0': image_transform.crop_x0,
+                'crop_y0': image_transform.crop_y0,
+                'crop_width': self.resolution[0] if image_transform.is_crop else 0,
+                'crop_height': self.resolution[1] if image_transform.is_crop else 0,
+                'crop_applied': image_transform.is_crop,
                 'bbox_downsample_ratio': self.resolution / features_size,
                 'orig_ds': orig_ds,
                 'stat_gt_cars': stat_gt_cars,

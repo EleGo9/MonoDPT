@@ -167,6 +167,34 @@ class Calibration(object):
         self.tx = self.P2[0, 3] / (-self.fu)
         self.ty = self.P2[1, 3] / (-self.fv)
 
+    def set_projection_matrix(self, P2):
+        """Replace ``P2`` and refresh the cached camera parameters."""
+        self.P2 = np.asarray(P2, dtype=np.float32).copy()
+        self.cu = self.P2[0, 2]
+        self.cv = self.P2[1, 2]
+        self.fu = self.P2[0, 0]
+        self.fv = self.P2[1, 1]
+        self.tx = self.P2[0, 3] / (-self.fu)
+        self.ty = self.P2[1, 3] / (-self.fv)
+
+    def apply_image_transform(self, scale, offset_x, offset_y):
+        """Adjust P2 for resize/pad or crop coordinates.
+
+        ``rect_to_img`` uses rectified camera Z as its projection denominator,
+        so the first two rows of P2 receive the same affine image transform as
+        projected pixels. A pure crop uses scale 1 and negative offsets.
+        """
+        tx, ty = self.tx, self.ty
+        self.P2 = self.P2.copy()
+        self.P2[0, :] *= scale
+        self.P2[0, 2] += offset_x
+        self.P2[1, :] *= scale
+        self.P2[1, 2] += offset_y
+        self.set_projection_matrix(self.P2)
+        # Preserve the existing loader convention: image scaling changes focal
+        # lengths, but camera translation stays in physical camera coordinates.
+        self.tx, self.ty = tx, ty
+
     def cart_to_hom(self, pts):
         """
         :param pts: (N, 3 or 2)
