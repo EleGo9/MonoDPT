@@ -92,7 +92,9 @@ class Trainer(object):
                 / self.cfg.trainer.resume_model
                 / "checkpoints/checkpoint.pth"
             )  # todo: put in pydantic
-            assert resume_model_path.is_file()
+            assert resume_model_path.is_file(), "Resume model checkpoint not found: {}".format(
+                resume_model_path
+            )
             self.epoch, self.best_result, self.best_epoch, self.state = load_checkpoint(
                 fabric=self.fabric,
                 model=self.model,
