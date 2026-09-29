@@ -90,7 +90,15 @@ def main():
         run_name = logger.experiment.name
         if run_name is None:
             if cfg.trainer.resume_model is not None:
-                run_name = cfg.trainer.resume_model
+                resume_str = str(cfg.trainer.resume_model)
+                if resume_str.endswith('.pth'):
+                    import os
+                    if "checkpoints" in resume_str:
+                        run_name = resume_str.split("/checkpoints")[0].split("/")[-1]
+                    else:
+                        run_name = os.path.basename(resume_str).replace(".pth", "")
+                else:
+                    run_name = resume_str
             elif hasattr(logger.experiment, "id") and logger.experiment.id is not None:
                 run_name = logger.experiment.id
             else:
