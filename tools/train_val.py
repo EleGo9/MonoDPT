@@ -92,7 +92,6 @@ def main():
             if cfg.trainer.resume_model is not None:
                 resume_str = str(cfg.trainer.resume_model)
                 if resume_str.endswith('.pth'):
-                    import os
                     if "checkpoints" in resume_str:
                         run_name = resume_str.split("/checkpoints")[0].split("/")[-1]
                     else:
@@ -110,7 +109,6 @@ def main():
             if resume_str.endswith('.pth'):
                 # It's a file path. Extract the run name from the parent structure if possible,
                 # or just use a generic name for outputs
-                import os
                 if "checkpoints" in resume_str:
                     run_name = resume_str.split("/checkpoints")[0].split("/")[-1]
                 else:
