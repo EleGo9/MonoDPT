@@ -35,7 +35,7 @@ dataset:
   max_objs: 5
 
   resolution: [1274, 392]
-  scale_factor: 0.5  # crop window = resolution, scaled by this factor, floored to a multiple of 14
+  scale_factor: 1.0  # crop window = resolution, scaled by this factor, floored to a multiple of 14
   original_resolution: [1280, 720]
   filename_format: ['%06d', '%06d'] # '%015d', '%015d', '%016d']
 
