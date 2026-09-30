@@ -316,20 +316,12 @@ class Tester(object):
             calibs_for_decode = []
             for i, calib_orig in enumerate(original_calibs):
                 calib_adjusted = copy.deepcopy(calib_orig)
-                # The P2 tensor from dataloader is already adjusted, so we apply the same adjustment
-                if 'resize_scale' in info:
-                    resize_scale = info['resize_scale'][i]
-                    pad_w = info['pad_w'][i]
-                    pad_h = info['pad_h'][i]
-
-                    calib_adjusted.cu = calib_orig.cu * resize_scale + pad_w
-                    calib_adjusted.cv = calib_orig.cv * resize_scale + pad_h
-                    calib_adjusted.fu = calib_orig.fu * resize_scale
-                    calib_adjusted.fv = calib_orig.fv * resize_scale
-                    calib_adjusted.P2[0, 0] = calib_adjusted.fu
-                    calib_adjusted.P2[1, 1] = calib_adjusted.fv
-                    calib_adjusted.P2[0, 2] = calib_adjusted.cu
-                    calib_adjusted.P2[1, 2] = calib_adjusted.cv
+                if 'pad_w' in info:
+                    calib_adjusted.apply_image_transform(
+                        float(info['resize_scale'][i]),
+                        float(info['pad_w'][i]),
+                        float(info['pad_h'][i]),
+                    )
                 calibs_for_decode.append(calib_adjusted)
 
             cls_mean_size = self.dataloader.dataset.cls_mean_size

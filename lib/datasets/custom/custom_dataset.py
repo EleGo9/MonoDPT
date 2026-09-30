@@ -48,7 +48,6 @@ class Custom_Dataset(data.Dataset):
 
         # Configurable resolution (W * H)
         self.resolution = np.asarray(cfg.dataset.resolution, dtype=np.int32) # W * H
-        validate_model_resolution(self.resolution, patch_size=14)
 
         # Configurable max objects
         self.max_objs = cfg.dataset.max_objs
@@ -93,9 +92,20 @@ class Custom_Dataset(data.Dataset):
         self.calib_dir = os.path.join(self.root_dir, 'calib')
         self.label_dir = os.path.join(self.root_dir, 'label_2')
         self.original_resolution = np.asarray(cfg.dataset.original_resolution, dtype=np.int32)
-        self.crop_enabled = bool(
-            np.all(self.resolution <= self.original_resolution)
-            and np.any(self.resolution < self.original_resolution)
+        self.scale_factor = float(getattr(cfg.dataset, "scale_factor", 1.0))
+        fits = bool(np.all(self.resolution <= self.original_resolution))
+        if self.scale_factor != 1.0 and not fits:
+            raise ValueError("scale_factor != 1 requires resolution <= original_resolution")
+        self.crop_enabled = fits and (
+            bool(np.any(self.resolution < self.original_resolution)) or self.scale_factor != 1.0
+        )
+        ref = self._image_transform(tuple(self.original_resolution))
+        self.input_size = np.array([ref.target_width, ref.target_height], dtype=np.int32)
+        validate_model_resolution(self.input_size, patch_size=14)
+        print(
+            f"[Custom_Dataset] crop {ref.crop_width:g}x{ref.crop_height:g} "
+            f"at ({ref.crop_x0:g},{ref.crop_y0:g}) -> input {tuple(self.input_size)}, "
+            f"scale {ref.scale:g}"
         )
         # data augmentation configuration
         self.data_augmentation = True if split in ['train', 'trainval', 'all'] else False
@@ -148,6 +158,14 @@ class Custom_Dataset(data.Dataset):
         self.pd = PhotometricDistort()
         self.clip_2d = cfg.dataset.clip_2d
         self.kitti_official_eval = cfg.dataset.kitti_official_eval if cfg.dataset.kitti_official_eval is not None else False
+    def _image_transform(self, source_size):
+        return make_image_transform(
+            source_size,
+            self.resolution,
+            scale_factor=self.scale_factor,
+            allow_crop=self.crop_enabled,
+        )
+
     def filter_invalid_projections(self, idx_list):
         """Filter out images with 3D projections that fall outside the image boundaries."""
         print(f"Original dataset size: {len(idx_list)}")
@@ -160,7 +178,7 @@ class Custom_Dataset(data.Dataset):
             calib = self.get_calib(index)
             has_valid_objects = False
             image_size = self.get_image(index).size
-            image_transform = make_image_transform(image_size, self.resolution, allow_crop=self.crop_enabled)
+            image_transform = self._image_transform(image_size)
             for obj in objects:
                 # Apply the same filtering criteria as in __getitem__
                 # if obj.cls_type not in self.writelist:
@@ -178,8 +196,8 @@ class Custom_Dataset(data.Dataset):
                 center_3d, _ = calib.rect_to_img(center_3d)
                 center_3d = image_transform.transform_points(center_3d)[0]
 
-                if (0 <= center_3d[0] < self.resolution[0] and
-                    0 <= center_3d[1] < self.resolution[1]):
+                if (0 <= center_3d[0] < self.input_size[0] and
+                    0 <= center_3d[1] < self.input_size[1]):
                     has_valid_objects = True
 
                     break
@@ -310,11 +328,11 @@ class Custom_Dataset(data.Dataset):
 
     def preprocess_image(self, img):
         """Crop to the requested size when possible; otherwise keep letterboxing."""
-        image_transform = make_image_transform(img.size, self.resolution, allow_crop=self.crop_enabled)
+        image_transform = self._image_transform(img.size)
         if image_transform.is_crop:
             img = crop_image(img, image_transform)
         else:
-            img, _, _, _ = self.letterbox_resize(img, tuple(self.resolution.tolist()))
+            img, _, _, _ = self.letterbox_resize(img, tuple(self.input_size.tolist()))
         return img, image_transform
 
     def transform_object_boxes(self, objects, image_transform, flip):
@@ -369,8 +387,8 @@ class Custom_Dataset(data.Dataset):
         img = self.get_image(index)
         orig_ds = str(self.image_dir.split('/')[-2])
         orig_img_size = np.array(img.size)  # Original size (W, H)
-        crop_before_augmentation = make_image_transform(img.size, self.resolution, allow_crop=self.crop_enabled).is_crop
-        features_size = self.resolution // self.downsample    # W * H
+        crop_before_augmentation = self._image_transform(img.size).is_crop
+        features_size = self.input_size // self.downsample    # W * H
 
         # DISABLED: affine transform variables (not used with letterbox resize)
         # center = np.array(img.size) / 2
@@ -432,8 +450,8 @@ class Custom_Dataset(data.Dataset):
 
 
         # DISABLED: Affine transformation (replaced with letterbox resize)
-        # trans, trans_inv = get_affine_transform(center, crop_size, 0, self.resolution, inv=1)
-        # img_transform = img.transform(tuple(self.resolution.tolist()),
+        # trans, trans_inv = get_affine_transform(center, crop_size, 0, self.input_size, inv=1)
+        # img_transform = img.transform(tuple(self.input_size.tolist()),
         #                     method=Image.AFFINE,
         #                     data=tuple(trans_inv.reshape(-1).tolist()),
         #                     resample=Image.BILINEAR)
@@ -455,7 +473,7 @@ class Custom_Dataset(data.Dataset):
         img = (img - self.mean) / self.std
         img = img.transpose(2, 0, 1)  # C * H * W
         info = {'img_id': index,
-                'img_size': self.resolution,  # After resize
+                'img_size': self.input_size,  # After resize
                 'orig_img_size': orig_img_size,  # Before resize
                 'resize_scale': resize_scale,
                 'pad_w': pad_w,
@@ -464,10 +482,10 @@ class Custom_Dataset(data.Dataset):
                 'image_offset_y': pad_h,
                 'crop_x0': image_transform.crop_x0,
                 'crop_y0': image_transform.crop_y0,
-                'crop_width': self.resolution[0] if image_transform.is_crop else 0,
-                'crop_height': self.resolution[1] if image_transform.is_crop else 0,
+                'crop_width': image_transform.crop_width,
+                'crop_height': image_transform.crop_height,
                 'crop_applied': image_transform.is_crop,
-                'bbox_downsample_ratio': self.resolution / features_size,
+                'bbox_downsample_ratio': self.input_size / features_size,
                 'orig_ds': orig_ds}
         # print('INFO',info)
 
@@ -488,7 +506,7 @@ class Custom_Dataset(data.Dataset):
         if self.debug_geometry:
             self.debug_check_image_transform(source_calib, calib, image_transform)
         if random_flip_flag and self.aug_calib:
-            calib.flip(self.resolution)
+            calib.flip(self.input_size)
         objects_visible = self.transform_object_boxes(
             objects, image_transform, flip=random_flip_flag
         )
@@ -560,7 +578,7 @@ class Custom_Dataset(data.Dataset):
                 center_3d, _ = calib.rect_to_img(center_3d)
                 center_3d = center_3d[0]
                 if random_flip_flag and not self.aug_calib:
-                    center_3d[0] = self.resolution[0] - center_3d[0]
+                    center_3d[0] = self.input_size[0] - center_3d[0]
             else:
                 # Keep the pre-existing center target path when no crop is needed.
                 center_3d, _ = source_calib.rect_to_img(center_3d)
@@ -575,9 +593,9 @@ class Custom_Dataset(data.Dataset):
             # filter 3d center out of img
             proj_inside_img = True
 
-            if center_3d[0] < 0 or center_3d[0] >= self.resolution[0]: 
+            if center_3d[0] < 0 or center_3d[0] >= self.input_size[0]:
                 proj_inside_img = False
-            if center_3d[1] < 0 or center_3d[1] >= self.resolution[1]: 
+            if center_3d[1] < 0 or center_3d[1] >= self.input_size[1]:
                 proj_inside_img = False
 
             if proj_inside_img == False:
@@ -603,13 +621,13 @@ class Custom_Dataset(data.Dataset):
             w, h = bbox_2d[2] - bbox_2d[0], bbox_2d[3] - bbox_2d[1]
             size_2d[i] = 1. * w, 1. * h
 
-            center_2d_norm = center_2d / self.resolution
-            size_2d_norm = size_2d[i] / self.resolution
+            center_2d_norm = center_2d / self.input_size
+            size_2d_norm = size_2d[i] / self.input_size
 
             corner_2d_norm = corner_2d
-            corner_2d_norm[0: 2] = corner_2d[0: 2] / self.resolution
-            corner_2d_norm[2: 4] = corner_2d[2: 4] / self.resolution
-            center_3d_norm = center_3d / self.resolution
+            corner_2d_norm[0: 2] = corner_2d[0: 2] / self.input_size
+            corner_2d_norm[2: 4] = corner_2d[2: 4] / self.input_size
+            center_3d_norm = center_3d / self.input_size
 
             l, r = center_3d_norm[0] - corner_2d_norm[0], corner_2d_norm[2] - center_3d_norm[0]
             t, b = center_3d_norm[1] - corner_2d_norm[1], corner_2d_norm[3] - center_3d_norm[1]
@@ -697,7 +715,7 @@ class Custom_Dataset(data.Dataset):
                     center_3d, _ = calib.rect_to_img(center_3d)
                     center_3d = center_3d[0]
                     if image_transform.is_crop and random_flip_flag and not self.aug_calib:
-                        center_3d[0] = self.resolution[0] - center_3d[0]
+                        center_3d[0] = self.input_size[0] - center_3d[0]
                     # DISABLED: affine transformation
                     # if random_flip_flag and not self.aug_calib:  # random flip for center3d
                     #     center_3d[0] = orig_img_size[0] - center_3d[0]
@@ -706,9 +724,9 @@ class Custom_Dataset(data.Dataset):
                     # filter 3d center out of img
                     proj_inside_img = True
 
-                    if center_3d[0] < 0 or center_3d[0] >= self.resolution[0]: 
+                    if center_3d[0] < 0 or center_3d[0] >= self.input_size[0]:
                         proj_inside_img = False
-                    if center_3d[1] < 0 or center_3d[1] >= self.resolution[1]: 
+                    if center_3d[1] < 0 or center_3d[1] >= self.input_size[1]:
                         proj_inside_img = False
 
                     if proj_inside_img == False:
@@ -723,13 +741,13 @@ class Custom_Dataset(data.Dataset):
                     w, h = bbox_2d[2] - bbox_2d[0], bbox_2d[3] - bbox_2d[1]
                     size_2d[i + object_num] = 1. * w, 1. * h
 
-                    center_2d_norm = center_2d / self.resolution
-                    size_2d_norm = size_2d[i + object_num] / self.resolution
+                    center_2d_norm = center_2d / self.input_size
+                    size_2d_norm = size_2d[i + object_num] / self.input_size
 
                     corner_2d_norm = corner_2d
-                    corner_2d_norm[0: 2] = corner_2d[0: 2] / self.resolution
-                    corner_2d_norm[2: 4] = corner_2d[2: 4] / self.resolution
-                    center_3d_norm = center_3d / self.resolution
+                    corner_2d_norm[0: 2] = corner_2d[0: 2] / self.input_size
+                    corner_2d_norm[2: 4] = corner_2d[2: 4] / self.input_size
+                    center_3d_norm = center_3d / self.input_size
 
                     l, r = center_3d_norm[0] - corner_2d_norm[0], corner_2d_norm[2] - center_3d_norm[0]
                     t, b = center_3d_norm[1] - corner_2d_norm[1], corner_2d_norm[3] - center_3d_norm[1]
@@ -779,7 +797,7 @@ class Custom_Dataset(data.Dataset):
         targets = {
                    'calibs': calibs,
                    'indices': indices,
-                   'img_size': self.resolution,  # After resize
+                   'img_size': self.input_size,  # After resize
                    'labels': labels,
                    'boxes': boxes,
                    'boxes_3d': boxes_3d,
@@ -793,7 +811,7 @@ class Custom_Dataset(data.Dataset):
                    'obj_region': obj_region}
 
         info = {'img_id': index,
-                'img_size': self.resolution,  # After resize
+                'img_size': self.input_size,  # After resize
                 'orig_img_size': orig_img_size,  # Before resize
                 'resize_scale': resize_scale,
                 'pad_w': pad_w,
@@ -802,10 +820,10 @@ class Custom_Dataset(data.Dataset):
                 'image_offset_y': pad_h,
                 'crop_x0': image_transform.crop_x0,
                 'crop_y0': image_transform.crop_y0,
-                'crop_width': self.resolution[0] if image_transform.is_crop else 0,
-                'crop_height': self.resolution[1] if image_transform.is_crop else 0,
+                'crop_width': image_transform.crop_width,
+                'crop_height': image_transform.crop_height,
                 'crop_applied': image_transform.is_crop,
-                'bbox_downsample_ratio': self.resolution / features_size,
+                'bbox_downsample_ratio': self.input_size / features_size,
                 'orig_ds': orig_ds,
                 'stat_gt_cars': stat_gt_cars,
                 'stat_removed_by_depth': stat_removed_by_depth,
@@ -824,10 +842,10 @@ class Custom_Dataset(data.Dataset):
                 if cx == 0 and cy == 0 and w == 0 and h == 0:
                     continue
                 # Convert normalized coordinates to pixel coordinates
-                cx_px = int(cx * self.resolution[0])
-                cy_px = int(cy * self.resolution[1])
-                w_px = int(w * self.resolution[0])
-                h_px = int(h * self.resolution[1])
+                cx_px = int(cx * self.input_size[0])
+                cy_px = int(cy * self.input_size[1])
+                w_px = int(w * self.input_size[0])
+                h_px = int(h * self.input_size[1])
                 img_vis = img.copy()
                 img_vis = np.transpose(img_vis, (1, 2, 0))
                 xyxy_box = box_cxcywh_to_xyxy(torch.tensor([[cx_px, cy_px, w_px, h_px]]))
@@ -847,12 +865,12 @@ class Custom_Dataset(data.Dataset):
                 cx, cy, l, r, t, b = box3d
                 if cx == 0 and cy == 0 and w == 0 and h == 0:
                     continue
-                cx_px = int(cx * self.resolution[0])
-                cy_px = int(cy * self.resolution[1])   
-                l = int(l * self.resolution[0])
-                r = int(r * self.resolution[0])
-                t = int(t * self.resolution[1])
-                b = int(b * self.resolution[1])
+                cx_px = int(cx * self.input_size[0])
+                cy_px = int(cy * self.input_size[1])
+                l = int(l * self.input_size[0])
+                r = int(r * self.input_size[0])
+                t = int(t * self.input_size[1])
+                b = int(b * self.input_size[1])
                 b2d_from_3d = box_cxcylrtb_to_xyxy(torch.tensor([[cx_px, cy_px, l, r, t, b]]))
                 b2d_from_3d = b2d_from_3d.numpy()[0]
                 img_vis3d = draw_2d_boxes(img_vis3d, b2d_from_3d, color=(255, 0, 0))
@@ -865,7 +883,7 @@ class Custom_Dataset(data.Dataset):
                 locations = calib.img_to_rect(cx_px, cy_px, dpt[0]).reshape(-1)
                 locations[1] += hwl[0] / 2
                 alpha = class2angle(head_bin, head_res, to_label_format=True)
-                denorm_box_2d_center = box_2d[0] * self.resolution[0]
+                denorm_box_2d_center = box_2d[0] * self.input_size[0]
                 ry = calib.alpha2ry(alpha, denorm_box_2d_center)
                 
                 verts_cur, _ = project_3d(p2, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)

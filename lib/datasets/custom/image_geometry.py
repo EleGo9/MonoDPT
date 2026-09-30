@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+from PIL import Image
 
 
 @dataclass(frozen=True)
@@ -20,10 +21,12 @@ class ImageTransform:
     target_height: int
     mode: str
     scale: float
-    offset_x: int
-    offset_y: int
-    crop_x0: int = 0
-    crop_y0: int = 0
+    offset_x: float
+    offset_y: float
+    crop_x0: float = 0.0
+    crop_y0: float = 0.0
+    crop_width: float = 0.0
+    crop_height: float = 0.0
 
     @property
     def is_crop(self):
@@ -64,38 +67,68 @@ class ImageTransform:
         return box
 
 
-def make_image_transform(source_size, target_size, *, allow_crop=True):
+def model_input_size(crop_size, scale_factor, patch_size=14):
+    """Return the scaled crop size rounded down to the model patch grid."""
+    scale_factor = float(scale_factor)
+    if not np.isfinite(scale_factor) or scale_factor <= 0:
+        raise ValueError("scale_factor must be positive and finite")
+    return tuple(
+        max(patch_size, int(np.floor(int(c) * scale_factor / patch_size + 1e-9)) * patch_size)
+        for c in crop_size
+    )
+
+
+def make_image_transform(
+    source_size, crop_size, *, scale_factor=1.0, allow_crop=True, patch_size=14
+):
     """Choose a centered crop when it fits, otherwise the legacy letterbox.
 
-    ``source_size`` and ``target_size`` are ``(width, height)`` pairs.
-    Cropping is enabled by the caller only when the configured target is
-    smaller than the configured source size. Equal-size inputs intentionally
-    use the letterbox path with identity geometry.
+    source_size and crop_size are (width, height) pairs. The configured crop
+    window is scaled only on the crop path.
     """
     source_width, source_height = map(int, source_size)
-    target_width, target_height = map(int, target_size)
+    crop_width, crop_height = map(int, crop_size)
+    scale_factor = float(scale_factor)
 
-    if min(source_width, source_height, target_width, target_height) <= 0:
-        raise ValueError("Image dimensions must be positive")
+    if min(source_width, source_height, crop_width, crop_height) <= 0:
+        raise ValueError("Image dimensions and crop size must be positive")
+    if not np.isfinite(scale_factor) or scale_factor <= 0:
+        raise ValueError("scale_factor must be positive and finite")
 
-    fits = target_width <= source_width and target_height <= source_height
-    is_smaller = target_width < source_width or target_height < source_height
-    if allow_crop and fits and is_smaller:
-        crop_x0 = (source_width - target_width) // 2
-        crop_y0 = (source_height - target_height) // 2
+    fits = crop_width <= source_width and crop_height <= source_height
+    is_smaller = crop_width < source_width or crop_height < source_height
+    if scale_factor != 1.0 and not (allow_crop and fits):
+        raise ValueError("scale_factor != 1 needs the crop path and resolution <= source size")
+
+    if allow_crop and fits and (is_smaller or scale_factor != 1.0):
+        target_width, target_height = model_input_size(
+            (crop_width, crop_height), scale_factor, patch_size
+        )
+        window_width, window_height = target_width / scale_factor, target_height / scale_factor
+        if window_width > crop_width + 1e-9 or window_height > crop_height + 1e-9:
+            raise ValueError("scale_factor is too small for a patch-sized input within the crop window")
+        if scale_factor == 1.0:
+            crop_x0 = (source_width - target_width) // 2
+            crop_y0 = (source_height - target_height) // 2
+        else:
+            crop_x0 = (source_width - window_width) / 2
+            crop_y0 = (source_height - window_height) / 2
         return ImageTransform(
             source_width=source_width,
             source_height=source_height,
             target_width=target_width,
             target_height=target_height,
             mode="crop",
-            scale=1.0,
-            offset_x=-crop_x0,
-            offset_y=-crop_y0,
+            scale=scale_factor,
+            offset_x=-scale_factor * crop_x0,
+            offset_y=-scale_factor * crop_y0,
             crop_x0=crop_x0,
             crop_y0=crop_y0,
+            crop_width=window_width,
+            crop_height=window_height,
         )
 
+    target_width, target_height = crop_width, crop_height
     scale = min(target_width / source_width, target_height / source_height)
     resized_width = int(source_width * scale)
     resized_height = int(source_height * scale)
@@ -114,12 +147,21 @@ def make_image_transform(source_size, target_size, *, allow_crop=True):
 
 
 def crop_image(image, transform):
-    """Apply the crop selected by ``make_image_transform`` to a PIL image."""
+    """Apply the crop selected by make_image_transform to a PIL image."""
     if not transform.is_crop:
         return image
-    x0, y0 = transform.crop_x0, transform.crop_y0
-    return image.crop(
-        (x0, y0, x0 + transform.target_width, y0 + transform.target_height)
+    box = (
+        transform.crop_x0,
+        transform.crop_y0,
+        min(transform.crop_x0 + transform.crop_width, transform.source_width),
+        min(transform.crop_y0 + transform.crop_height, transform.source_height),
+    )
+    if transform.scale == 1.0:
+        return image.crop(tuple(int(value) for value in box))
+    return image.resize(
+        (transform.target_width, transform.target_height),
+        Image.BILINEAR,
+        box=box,
     )
 
 
