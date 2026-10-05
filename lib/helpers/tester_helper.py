@@ -337,6 +337,9 @@ class Tester(object):
                 threshold=self.cfg.tester.threshold,
             )
 
+            if self.should_log_images(batch_idx, step):
+                self.log_images(outputs, targets, decoded, original_calibs, info, step)
+
             # DEBUG: Check how many detections we got
             total_dets_before = sum(len(decoded[k]) for k in decoded.keys())
             # print(f"DEBUG: Decoded {total_dets_before} detections for {len(decoded)} images (before correction)")
