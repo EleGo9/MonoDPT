@@ -42,7 +42,7 @@ class DatasetConfig(BaseModel):
 
     depth_scale: str = 'normal'
 
-    # Custom_Dataset configurable parameters (optional, with defaults)
+    # CustomV2Dataset configurable parameters (optional, with defaults)
     # These are ignored by KITTI_Dataset and INDY_Dataset unless explicitly used
     class_name: Optional[List[str]] = None  # e.g., ['Pedestrian', 'Car', 'Cyclist']
     cls2id: Optional[dict] = None  # e.g., {'Pedestrian': 0, 'Car': 1, 'Cyclist': 2}

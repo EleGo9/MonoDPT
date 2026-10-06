@@ -5,7 +5,6 @@ import numpy as np
 from torch.utils.data import DataLoader, ConcatDataset
 
 from lib.helpers.config_helper import Config
-from lib.datasets.kitti.kitti_dataset import KITTI_Dataset
 
 
 class InheritedConcatDataset(ConcatDataset):
@@ -328,6 +327,8 @@ def my_worker_init_fn(worker_id):
 def build_dataloader(fabric: Fabric, cfg: Config, workers: int =4):
     # perpare dataset
     if cfg.dataset.type == 'KITTI':
+        from lib.datasets.kitti.kitti_dataset import KITTI_Dataset
+
         train_set = KITTI_Dataset(split=cfg.dataset.train_split, cfg=cfg)
         test_set = KITTI_Dataset(split=cfg.dataset.test_split, cfg=cfg)
     elif cfg.dataset.type == 'INDY':
@@ -351,7 +352,7 @@ def build_dataloader(fabric: Fabric, cfg: Config, workers: int =4):
         test_set.max_objs = test_sets[0].max_objs
         print('Number of samples in test', len(test_set))
     elif cfg.dataset.type == 'CUSTOM':
-        from lib.datasets.custom.custom_dataset import Custom_Dataset
+        from lib.datasets.custom.custom_v2_dataset import CustomV2Dataset
         train_sets = []
         test_sets = []
 
@@ -372,10 +373,10 @@ def build_dataloader(fabric: Fabric, cfg: Config, workers: int =4):
             root_dirs_test = [cfg.dataset.root_dir]
 
         for n, root_dir in enumerate(root_dirs_train):
-            train_sets.append(Custom_Dataset(split=cfg.dataset.train_split, cfg=cfg, root_dir=root_dir, dataset_id=n ))
+            train_sets.append(CustomV2Dataset(split=cfg.dataset.train_split, cfg=cfg, root_dir=root_dir, dataset_id=n ))
             print('training: ', root_dir)
         for n, root_dir_test in enumerate(root_dirs_test):
-            test_sets.append(Custom_Dataset(split=cfg.dataset.test_split, cfg=cfg, root_dir = root_dir_test, dataset_id=n))
+            test_sets.append(CustomV2Dataset(split=cfg.dataset.test_split, cfg=cfg, root_dir = root_dir_test, dataset_id=n))
             print('test: ', root_dir_test)
 
         train_set = InheritedConcatDataset(train_sets)

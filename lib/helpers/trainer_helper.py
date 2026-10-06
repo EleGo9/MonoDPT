@@ -448,7 +448,6 @@ class Trainer(object):
         key_list = [
             "labels",
             "boxes",
-            "calibs",
             "depth",
             "size_3d",
             "src_size_3d",

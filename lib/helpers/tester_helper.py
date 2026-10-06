@@ -27,8 +27,6 @@ from lib.models.monodpt.depth_predictor.ddn_loss import DDNLoss
 
 from utils import box_ops
 
-B = 0
-
 def plot_boxes(img: np.array, boxes: list[Object3d], calib: Calibration, mask: Optional[list] = None):
     corners_3d = []
     for box in boxes:
@@ -338,7 +336,15 @@ class Tester(object):
             )
 
             if self.should_log_images(batch_idx, step):
-                self.log_images(outputs, targets, decoded, original_calibs, info, step)
+                self.log_images(
+                    outputs,
+                    targets,
+                    decoded,
+                    original_calibs,
+                    info,
+                    step,
+                    batch_index=0,
+                )
 
             # DEBUG: Check how many detections we got
             total_dets_before = sum(len(decoded[k]) for k in decoded.keys())
@@ -553,11 +559,11 @@ class Tester(object):
         rank_zero = self.fabric.is_global_zero
         return rank_zero and (self.logged_images < self.images_to_log) and (step is not None) and batch_idx % 32 == 0
 
-    def log_images(self, outputs, targets, decoded, calibs_orig, info, step):
+    def log_images(self, outputs, targets, decoded, calibs_orig, info, step, batch_index):
 
         # Use ORIGINAL calibration for visualization (predictions already converted to original coords)
-        calib = calibs_orig[B]
-        img_id = info['img_id'][B]
+        calib = calibs_orig[batch_index]
+        img_id = info['img_id'][batch_index]
         input_img = self.dataloader.dataset.get_image(img_id)
         input_img = np.array(input_img)
 
@@ -572,9 +578,8 @@ class Tester(object):
             box_pred_objs.append(obj_pred)
 
         # Get list of Object3d from ground truth (in original coordinates)
-        mask = targets['mask_2d'][B]
         box_true_obj = self.dataloader.dataset.get_label(img_id)  # type: list[Object3d]
-        # box_true_obj = [b for b, k in zip(box_true_obj, mask) if k] # filter GT boxes
+        mask = [obj.trucation <= 0.5 and obj.occlusion <= 2 for obj in box_true_obj]
 
         # Plot 3D true-pred boxes (both in original coordinates now)
         img_box_true = plot_boxes(input_img, box_true_obj, calib, mask)
@@ -585,15 +590,15 @@ class Tester(object):
 
         # Plot depth mask pred
         depth_maps_true, depth_maps_pred = get_depthmap_true(outputs, targets)
-        depth_maps_true = cmap_mono(depth_maps_true[B].cpu().numpy())
-        depth_maps_pred = cmap_mono(depth_maps_pred[B][0].cpu().numpy())
+        depth_maps_true = cmap_mono(depth_maps_true[batch_index].cpu().numpy())
+        depth_maps_pred = cmap_mono(depth_maps_pred[batch_index][0].cpu().numpy())
 
         """cv2.imwrite("depth_maps_true.png", depth_maps_true)
         cv2.imwrite("depth_maps_pred.png", depth_maps_pred)"""
 
         # plot region seg
-        obj_region_true = (targets['obj_region'][B].cpu().numpy() * 255 ).astype(np.uint8)
-        obj_region_pred = (outputs['pred_region_prob'][-1][B][0].cpu().numpy() * 255).astype(np.uint8)
+        obj_region_true = (targets['obj_region'][batch_index].cpu().numpy() * 255 ).astype(np.uint8)
+        obj_region_pred = (outputs['pred_region_prob'][-1][batch_index][0].cpu().numpy() * 255).astype(np.uint8)
 
         target_h, target_w, _ = img_box_true.shape
         true_image = prepare_plot_tensor([img_box_true, depth_maps_true, obj_region_true], (target_h, target_w))
