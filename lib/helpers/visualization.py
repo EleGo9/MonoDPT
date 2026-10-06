@@ -22,12 +22,12 @@ def mkdir_if_missing(directory, delete_if_exist=False):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
+def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
     """
     Projects a 3D box into 2D vertices
 
     Args:
-        p2 (nparray): projection matrix of size 4x3
+        calib: calibration matrix (could p2 for first 2 cases)
         x3d: x-coordinate of center of object
         y3d: y-coordinate of center of object
         z3d: z-cordinate of center of object
@@ -40,7 +40,7 @@ def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
     if type(x3d) == np.ndarray:
 
         p2_batch = np.zeros([x3d.shape[0], 4, 4])
-        p2_batch[:, :, :] = p2[np.newaxis, :, :]
+        p2_batch[:, :, :] = calib[np.newaxis, :, :]
 
         ry3d_cos = np.cos(ry3d)
         ry3d_sin = np.sin(ry3d)
@@ -86,7 +86,7 @@ def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
     elif type(x3d) == torch.Tensor:
 
         p2_batch = torch.zeros(x3d.shape[0], 4, 4)
-        p2_batch[:, :, :] = p2[np.newaxis, :, :]
+        p2_batch[:, :, :] = calib[np.newaxis, :, :]
 
         ry3d_cos = torch.cos(ry3d)
         ry3d_sin = torch.sin(ry3d)
@@ -140,13 +140,9 @@ def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
                       [-math.sin(ry3d), 0, +math.cos(ry3d)]])
 
         # 3D bounding box corners
-        x_corners = np.array([0, w3d, w3d, w3d, w3d, 0, 0, 0], dtype=np.float64)
-        y_corners = np.array([0, 0, h3d, h3d, 0, 0, h3d, h3d], dtype=np.float64)
-        z_corners = np.array([0, 0, 0, l3d, l3d, l3d, l3d, 0], dtype=np.float64)
-
-        x_corners += -w3d / 2
-        y_corners += -h3d / 2
-        z_corners += -l3d / 2
+        x_corners = np.array([0, w3d, w3d, w3d, w3d, 0, 0, 0], dtype=np.float64) - w3d / 2
+        y_corners = np.array([0, 0, h3d, h3d, 0, 0, h3d, h3d], dtype=np.float64) - h3d / 2
+        z_corners = np.array([0, 0, 0, l3d, l3d, l3d, l3d, 0], dtype=np.float64) - l3d / 2
 
         # bounding box in object co-ordinate
         corners_3d = np.array([x_corners, y_corners, z_corners])
@@ -157,18 +153,12 @@ def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
         # translate
         corners_3d += np.array([x3d, y3d, z3d]).reshape((3, 1))
 
-        corners_3D_1 = np.vstack((corners_3d, np.ones((corners_3d.shape[-1]))))
-        corners_2D = p2.dot(corners_3D_1)
-        corners_2D = corners_2D / corners_2D[2]
-
-        # corners_2D = np.zeros([3, corners_3d.shape[1]])
-        # for i in range(corners_3d.shape[1]):
-        #    a, b, c, d = argoverse.utils.calibration.proj_cam_to_uv(corners_3d[:, i][np.newaxis, :], p2)
-        #    corners_2D[:2, i] = a
-        #    corners_2D[2, i] = corners_3d[2, i]
+        # use Calibration object to project with distortion
+        # rect_to_img takes (N, 3) and returns (N, 2), depths
+        corners_2D, _ = calib.rect_to_img(corners_3d.T)
+        corners_2D = corners_2D.T # back to (2, N)
 
         bb3d_lines_verts_idx = [0, 1, 2, 3, 4, 5, 6, 7, 0, 5, 4, 1, 2, 7, 6, 3]
-
         verts3d = (corners_2D[:, bb3d_lines_verts_idx][:2]).astype(float).T
 
     if return_3d:
@@ -313,8 +303,8 @@ def draw_text(im, text, pos, scale=0.4, color=(0, 0, 0), font=cv2.FONT_HERSHEY_S
 
 def draw_bev(canvas_bev, z3d, l3d, w3d, x3d, ry3d, color=(0, 200, 200), scale=1, thickness=2, text= None):
 
-    w = l3d * scale
-    l = w3d * scale
+    w = w3d * scale
+    l = l3d * scale
     x = x3d * scale
     z = z3d * scale
     r = ry3d*-1
@@ -450,7 +440,7 @@ def is_slanted(label_file, ego_height= 1.65):
 def plot_on_image_from_txt(
     img, 
     predictions_img, 
-    p2, 
+    calib, 
     box_colors, 
     canvas_bev,
     bev_scale=1,):
@@ -535,7 +525,7 @@ def plot_on_image_from_txt(
                     # Draw text
                     cv2.putText(img, label, (x1[j], y1[j] - 2), cv2.FONT_HERSHEY_SIMPLEX, 
                                 font_scale, (255, 255, 255), 1, cv2.LINE_AA)
-                verts_cur, _ = project_3d(p2, x3d[j], y3d[j], z3d[j], w3d[j], h3d[j], l3d[j], ry3d[j], return_3d=True)
+                verts_cur, _ = project_3d(calib, x3d[j], y3d[j], z3d[j], w3d[j], h3d[j], l3d[j], ry3d[j], return_3d=True)
                 img = draw_3d_box(img, verts_cur, color= box_color, thickness= thickness)
                 bev_img = draw_bev(canvas_bev, z3d[j], l3d[j], w3d[j], x3d[j], ry3d[j], color= box_color, scale = bev_scale, thickness= thickness, text= None)
             # img = imhstack(img, bev_img)

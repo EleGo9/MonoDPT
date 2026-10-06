@@ -20,10 +20,9 @@ import imutils
 import random
 
 from lib.helpers.file_io import imread, imwrite, read_csv
-from lib.datasets.kitti.kitti_utils import get_calib_from_file, get_objects_from_label
 # from lib.datasets.utils import convertRot2Alpha
-from lib.visualization import *
-from lib.visualization import draw_3d_box, draw_transparent_box,draw_2d_boxes, project_3d, plot_on_image_from_txt, imhstack, create_colorbar, draw_tick_marks
+from lib.helpers.visualization import *
+from lib.helpers.visualization import draw_3d_box, draw_transparent_box,draw_2d_boxes, project_3d, plot_on_image_from_txt, imhstack, create_colorbar, draw_tick_marks
 
 # from lib.math_3d import *
 # from lib.util import create_colorbar, draw_bev, draw_tick_marks, imhstack, draw_3d_box
@@ -53,7 +52,7 @@ def main(args):
     # ticks = [100, 80, 60, 40,0]
 
     bev_scale    = 8   # Pixels per meter
-    bev_max_w    = 15   # Max along positive X direction. # This corresponds to the camera-view of (-max, max)
+    bev_max_w    = 20   # Max along positive X direction. # This corresponds to the camera-view of (-max, max)
     bev_w        = 2 * bev_max_w * bev_scale
     bev_max_z= 120
     ticks = [120, 90, 60, 30, 0]
@@ -163,7 +162,9 @@ def main(args):
             print(f"  Warning: Image file not found for {basename}, skipping...")
             continue
 
-        p2         = get_calib_from_file(cal_file)['P2']
+        
+        from lib.datasets.kitti.kitti_utils import Calibration
+        calib_obj = Calibration(cal_file)
         gt_img     = read_csv(label_file, ignore_warnings= True, use_pandas= True) if label_file else None
 
         if gt_img is not None:
@@ -204,7 +205,7 @@ def main(args):
         if gt_img is not None:
             img, bev_img = plot_on_image_from_txt(img, 
                     gt_img,
-                    p2, 
+                    calib_obj, 
                     box_colors = [(0, 255, 0), (0, 50, 0), (0, 200, 0), (0, 150, 0), (0, 100, 0)], 
                     canvas_bev=bev_img,
                     bev_scale=bev_scale,)
@@ -220,7 +221,7 @@ def main(args):
             #     if float(predictions_img[15])>0.35:
             img, bev_img = plot_on_image_from_txt(img, 
                 predictions_img, 
-                p2, 
+                calib_obj, 
                 box_colors = [(0, 0, 255),(0, 0, 200),(0, 0, 150),(0, 0, 100),(0, 50, 200)],
                 canvas_bev=bev_img,
                 bev_scale=bev_scale,)
