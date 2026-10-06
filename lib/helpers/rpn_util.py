@@ -6,8 +6,6 @@ import glob
 import torch
 
 from lib.helpers.file_io import *
-from lib.helpers.util import *
-
 
 def get_MAE(results_folder, gt_folder, conf=None, use_logging=False, logger=None,
             thresholds=np.array([0, 25, 50, 1000]),

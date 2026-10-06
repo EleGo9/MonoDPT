@@ -655,7 +655,7 @@ class INDY_Dataset(data.Dataset):
                 print(f"[viz ry]: {np.rad2deg(ry)}")
                 
                 
-                verts_cur, _ = project_3d(p2, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
+                verts_cur, _ = project_3d(calib, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
                 try:
                     img_vis3d = draw_3d_box(img_vis3d, verts_cur, color= (255,0,0), thickness= 2)
                 except:

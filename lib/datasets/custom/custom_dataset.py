@@ -5,6 +5,8 @@ from PIL import Image, ImageFile
 import random
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+import os, sys
+sys.path.append(os.getcwd())
 from lib.datasets.utils import angle2class
 from lib.datasets.utils import gaussian_radius
 from lib.datasets.utils import draw_umich_gaussian
@@ -26,7 +28,7 @@ from lib.datasets.custom.pd import PhotometricDistort
 from lib.datasets.custom.image_geometry import crop_image, make_image_transform, validate_model_resolution
 from tqdm.auto import tqdm
 
-DEBUG = False
+DEBUG = True
 
 class Custom_Dataset(data.Dataset):
     def __init__(self, split, cfg, root_dir=None, dataset_id=0):
@@ -858,12 +860,12 @@ class Custom_Dataset(data.Dataset):
                 # cv2.waitKey(0)
 
             # 3d boxes visualization
-            for box_2d, box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes, boxes_3d, calibs, size_3d, heading_bin, heading_res, depth):
+            for box_2d, box3d, cal_mat, hwl, head_bin, head_res, dpt  in zip(boxes, boxes_3d, calibs, src_size_3d, heading_bin, heading_res, depth):
                 img_vis3d = img.copy()
                 img_vis3d = np.transpose(img_vis3d, (1, 2, 0))
                 p2 = cal_mat
                 cx, cy, l, r, t, b = box3d
-                if cx == 0 and cy == 0 and w == 0 and h == 0:
+                if not np.any(box_2d):
                     continue
                 cx_px = int(cx * self.input_size[0])
                 cy_px = int(cy * self.input_size[1])
@@ -886,7 +888,7 @@ class Custom_Dataset(data.Dataset):
                 denorm_box_2d_center = box_2d[0] * self.input_size[0]
                 ry = calib.alpha2ry(alpha, denorm_box_2d_center)
                 
-                verts_cur, _ = project_3d(p2, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
+                verts_cur, _ = project_3d(calib, locations[0], locations[1]- dimens[0]/2, locations[2], dimens[1], dimens[0], dimens[2], ry[0], return_3d=True)
                 try:
                     img_vis3d = draw_3d_box(img_vis3d, verts_cur, color= (255,0,0), thickness= 2)
                 except:
