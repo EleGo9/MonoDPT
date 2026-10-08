@@ -35,6 +35,9 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
         h3d: height of object
         l3d: length of object
         ry3d: rotation w.r.t y-axis
+
+    KITTI camera boxes use length along local X and width along local Z.
+    The input location is the cuboid's geometric center.
     """
 
     if type(x3d) == np.ndarray:
@@ -54,9 +57,9 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
 
         corners_3d = np.zeros([x3d.shape[0], 3, 8])
 
-        # setup X
-        corners_3d[:, 0, :] = -w3d[:, np.newaxis] / 2
-        corners_3d[:, 0, 1:5] = w3d[:, np.newaxis] / 2
+        # KITTI camera boxes use length along local X and width along local Z.
+        corners_3d[:, 0, :] = -l3d[:, np.newaxis] / 2
+        corners_3d[:, 0, 1:5] = l3d[:, np.newaxis] / 2
 
         # setup Y
         corners_3d[:, 1, :] = -h3d[:, np.newaxis] / 2
@@ -64,8 +67,8 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
         corners_3d[:, 1, 6:8] = h3d[:, np.newaxis] / 2
 
         # setup Z
-        corners_3d[:, 2, :] = -l3d[:, np.newaxis] / 2
-        corners_3d[:, 2, 3:7] = l3d[:, np.newaxis] / 2
+        corners_3d[:, 2, :] = -w3d[:, np.newaxis] / 2
+        corners_3d[:, 2, 3:7] = w3d[:, np.newaxis] / 2
 
         # rotate
         corners_3d = R @ corners_3d
@@ -100,9 +103,9 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
 
         corners_3d = torch.zeros(x3d.shape[0], 3, 8)
 
-        # setup X
-        corners_3d[:, 0, :] = -w3d[:, np.newaxis] / 2
-        corners_3d[:, 0, 1:5] = w3d[:, np.newaxis] / 2
+        # KITTI camera boxes use length along local X and width along local Z.
+        corners_3d[:, 0, :] = -l3d[:, np.newaxis] / 2
+        corners_3d[:, 0, 1:5] = l3d[:, np.newaxis] / 2
 
         # setup Y
         corners_3d[:, 1, :] = -h3d[:, np.newaxis] / 2
@@ -110,8 +113,8 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
         corners_3d[:, 1, 6:8] = h3d[:, np.newaxis] / 2
 
         # setup Z
-        corners_3d[:, 2, :] = -l3d[:, np.newaxis] / 2
-        corners_3d[:, 2, 3:7] = l3d[:, np.newaxis] / 2
+        corners_3d[:, 2, :] = -w3d[:, np.newaxis] / 2
+        corners_3d[:, 2, 3:7] = w3d[:, np.newaxis] / 2
 
         # rotate
         corners_3d = torch.bmm(R, corners_3d)
@@ -140,9 +143,9 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
                       [-math.sin(ry3d), 0, +math.cos(ry3d)]])
 
         # 3D bounding box corners
-        x_corners = np.array([0, w3d, w3d, w3d, w3d, 0, 0, 0], dtype=np.float64) - w3d / 2
+        x_corners = np.array([0, l3d, l3d, l3d, l3d, 0, 0, 0], dtype=np.float64) - l3d / 2
         y_corners = np.array([0, 0, h3d, h3d, 0, 0, h3d, h3d], dtype=np.float64) - h3d / 2
-        z_corners = np.array([0, 0, 0, l3d, l3d, l3d, l3d, 0], dtype=np.float64) - l3d / 2
+        z_corners = np.array([0, 0, 0, w3d, w3d, w3d, w3d, 0], dtype=np.float64) - w3d / 2
 
         # bounding box in object co-ordinate
         corners_3d = np.array([x_corners, y_corners, z_corners])
@@ -310,10 +313,10 @@ def draw_bev(canvas_bev, z3d, l3d, w3d, x3d, ry3d, color=(0, 200, 200), scale=1,
     r = ry3d*-1
 
     corners1 = np.array([
-        [-w / 2, -l / 2, 1],
-        [+w / 2, -l / 2, 1],
-        [+w / 2, +l / 2, 1],
-        [-w / 2, +l / 2, 1]
+        [-l / 2, -w / 2, 1],
+        [+l / 2, -w / 2, 1],
+        [+l / 2, +w / 2, 1],
+        [-l / 2, +w / 2, 1]
     ])
 
     ry = np.array([
