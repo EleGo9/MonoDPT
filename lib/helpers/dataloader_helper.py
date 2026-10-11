@@ -308,7 +308,7 @@ class InheritedConcatDataset(ConcatDataset):
                 dt_annos,
                 target_dataset.writelist,
                 max_depth=target_dataset.depth_threshold,
-                iou_thres=0.7
+                iou_thres=target_dataset.cfg.dataset.iou_thres,
             )
 
             if logger is not None:
