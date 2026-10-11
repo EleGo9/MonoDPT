@@ -67,27 +67,26 @@ def draw_boxes(img, corners_2d_all, thickness=2, mask=None):
             cv2.line(img, tuple(corners_2d[i]), tuple(corners_2d[j]), color, thickness)
     return img
 
-def build_weighted_depth_from_logits(depth_logits):
-    depth_num_bins = 80
-    depth_min = 1e-3
-    depth_max = 60.0
+def build_weighted_depth_from_logits(depth_logits, depth_num_bins, depth_min, depth_max):
     bin_size = 2 * (depth_max - depth_min) / (depth_num_bins * (1 + depth_num_bins))
-    bin_indice = torch.linspace(0, depth_num_bins - 1, depth_num_bins)
+    bin_indice = torch.arange(depth_num_bins, device=depth_logits.device, dtype=depth_logits.dtype)
     bin_value = (bin_indice + 0.5).pow(2) * bin_size / 2 - bin_size / 8 + depth_min
-    bin_value = torch.cat([bin_value, torch.tensor([depth_max])], dim=0).to(depth_logits.device)
+    bin_value = torch.cat([
+        bin_value,
+        torch.tensor([depth_max], device=depth_logits.device, dtype=depth_logits.dtype),
+    ])
 
     # Calculate the median value along the depth_num_bins dimension
     median_values = torch.median(depth_logits, dim=1, keepdim=True).values
     # Apply the threshold: set values below the median to zero
-    thresholded_logits = torch.where(depth_logits >= median_values, depth_logits,
-                                     torch.tensor(0.0).to(depth_logits.device))
+    thresholded_logits = torch.where(depth_logits >= median_values, depth_logits, 0.0)
 
     depth_probs = F.softmax(thresholded_logits, dim=1)
     weighted_depth = (depth_probs * bin_value.reshape(1, -1, 1, 1)).sum(dim=1)
 
     return weighted_depth
 
-def get_depthmap_true(outputs, targets):
+def get_depthmap_true(outputs, targets, cfg):
 
     depth_map_logits = outputs['pred_depth_map_logits']
 
@@ -95,17 +94,24 @@ def get_depthmap_true(outputs, targets):
 
     _, N, H, W = depth_map_logits.shape
     if N > 1:
-        depth_map_logits = build_weighted_depth_from_logits(depth_map_logits).unsqueeze(1)
+        depth_map_logits = build_weighted_depth_from_logits(
+            depth_map_logits,
+            depth_num_bins=cfg.model.num_depth_bins,
+            depth_min=cfg.model.depth_min,
+            depth_max=cfg.model.depth_max,
+        ).unsqueeze(1)
 
     num_gt_per_img = [m.sum() for m in mask]
     # (wip) cera un bug qui causato dalle shape hardcodate che rompevano la creazione della depthmap di GT
     if mask.sum() > 0:
-        gt_boxes2d = torch.cat([b[m] for b, m in zip(targets['boxes'], mask) if m.any()]) * torch.tensor([W, H, W, H], device='cuda')  # torch.tensor([80, 24, 80, 24], device='cuda')
+        gt_boxes2d = torch.cat([b[m] for b, m in zip(targets['boxes'], mask) if m.any()]) * torch.tensor(
+            [W, H, W, H], device=depth_map_logits.device
+        )
         gt_boxes2d = box_ops.box_cxcywh_to_xyxy(gt_boxes2d)
         gt_center_depth = torch.cat([b[m] for b, m in zip(targets['depth'], mask) if m.any()]).squeeze(dim=1)
     else:
-        gt_boxes2d = torch.empty((0,4), dtype=torch.float32, device='cuda')
-        gt_center_depth = torch.empty((0,), dtype=torch.float32, device='cuda')
+        gt_boxes2d = torch.empty((0, 4), dtype=torch.float32, device=depth_map_logits.device)
+        gt_center_depth = torch.empty((0,), dtype=torch.float32, device=depth_map_logits.device)
 
     depth_map_true = DDNLoss.build_target_depth_from_3dcenter(depth_map_logits, gt_boxes2d, gt_center_depth, num_gt_per_img)
 
@@ -589,7 +595,7 @@ class Tester(object):
         cv2.imwrite("box_pred_orig.png", img_box_pred)"""
 
         # Plot depth mask pred
-        depth_maps_true, depth_maps_pred = get_depthmap_true(outputs, targets)
+        depth_maps_true, depth_maps_pred = get_depthmap_true(outputs, targets, self.cfg)
         depth_maps_true = cmap_mono(depth_maps_true[batch_index].cpu().numpy())
         depth_maps_pred = cmap_mono(depth_maps_pred[batch_index][0].cpu().numpy())
 
