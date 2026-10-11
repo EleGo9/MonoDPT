@@ -28,11 +28,10 @@ dataset:
   iou_thres: 0.5
   distortion: False
 
-  # INDY_ckpts_best.pth was trained with this class order.
-  class_name: ['Pedestrian', 'Car', 'Cyclist']
+  class_name: ['Car']
   # Optional: Define custom class-to-id mapping
   # If not provided, will auto-generate from class_name
-  cls2id: {'Pedestrian': 0, 'Car': 1, 'Cyclist': 2}
+  cls2id: {'Car': 0}
   max_objs: 5
 
   resolution: [1274, 392]
@@ -57,12 +56,12 @@ dataset:
 
 model_name: 'monodgp'
 model:
-  num_classes: 3
+  num_classes: 1
   return_intermediate_dec: True
   device: 'cuda'
 
   # Backbone
-  backbone: 'dinov2_vitb'
+  backbone: 'dinov2_vits'
   use_dpt_head: True
   train_backbone: True
   num_feature_levels: 3
@@ -72,9 +71,9 @@ model:
 
   # Depth predictor
   mode: LID
-  num_depth_bins: 160
-  depth_min: 0.0
-  depth_max: 120.0
+  num_depth_bins: 80
+  depth_min: 1e-3
+  depth_max: 60.0
 
   # Transformer
   with_box_refine: True
