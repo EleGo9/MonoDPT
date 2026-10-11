@@ -41,7 +41,9 @@ def plot_boxes(img: np.array, boxes: list[Object3d], calib: Calibration, mask: O
         )
     return img_box
 
-def build_weighted_depth_from_logits(depth_logits, depth_num_bins, depth_min, depth_max):
+def build_weighted_depth_from_logits(
+    depth_logits, depth_num_bins, depth_min, depth_max, *, median_threshold=True
+):
     bin_size = 2 * (depth_max - depth_min) / (depth_num_bins * (1 + depth_num_bins))
     bin_indice = torch.arange(depth_num_bins, device=depth_logits.device, dtype=depth_logits.dtype)
     bin_value = (bin_indice + 0.5).pow(2) * bin_size / 2 - bin_size / 8 + depth_min
@@ -50,12 +52,13 @@ def build_weighted_depth_from_logits(depth_logits, depth_num_bins, depth_min, de
         torch.tensor([depth_max], device=depth_logits.device, dtype=depth_logits.dtype),
     ])
 
-    # Calculate the median value along the depth_num_bins dimension
-    median_values = torch.median(depth_logits, dim=1, keepdim=True).values
-    # Apply the threshold: set values below the median to zero
-    thresholded_logits = torch.where(depth_logits >= median_values, depth_logits, 0.0)
+    if median_threshold:
+        # This threshold is only for the legacy visualization. The model's
+        # own depth predictor uses an ordinary softmax over all depth bins.
+        median_values = torch.median(depth_logits, dim=1, keepdim=True).values
+        depth_logits = torch.where(depth_logits >= median_values, depth_logits, 0.0)
 
-    depth_probs = F.softmax(thresholded_logits, dim=1)
+    depth_probs = F.softmax(depth_logits, dim=1)
     weighted_depth = (depth_probs * bin_value.reshape(1, -1, 1, 1)).sum(dim=1)
 
     return weighted_depth
@@ -68,12 +71,25 @@ def get_depthmap_true(outputs, targets, cfg):
 
     _, N, H, W = depth_map_logits.shape
     if N > 1:
-        depth_map_logits = build_weighted_depth_from_logits(
+        depth_map_pred_thresholded = build_weighted_depth_from_logits(
             depth_map_logits,
             depth_num_bins=cfg.model.num_depth_bins,
             depth_min=cfg.model.depth_min,
             depth_max=cfg.model.depth_max,
-        ).unsqueeze(1)
+            median_threshold=True,
+        )
+        depth_map_pred_softmax = build_weighted_depth_from_logits(
+            depth_map_logits,
+            depth_num_bins=cfg.model.num_depth_bins,
+            depth_min=cfg.model.depth_min,
+            depth_max=cfg.model.depth_max,
+            median_threshold=False,
+        )
+        target_reference = depth_map_pred_softmax.unsqueeze(1)
+    else:
+        depth_map_pred_thresholded = depth_map_logits[:, 0]
+        depth_map_pred_softmax = depth_map_logits[:, 0]
+        target_reference = depth_map_logits
 
     num_gt_per_img = [m.sum() for m in mask]
     # (wip) cera un bug qui causato dalle shape hardcodate che rompevano la creazione della depthmap di GT
@@ -87,16 +103,125 @@ def get_depthmap_true(outputs, targets, cfg):
         gt_boxes2d = torch.empty((0, 4), dtype=torch.float32, device=depth_map_logits.device)
         gt_center_depth = torch.empty((0,), dtype=torch.float32, device=depth_map_logits.device)
 
-    depth_map_true = DDNLoss.build_target_depth_from_3dcenter(depth_map_logits, gt_boxes2d, gt_center_depth, num_gt_per_img)
+    depth_map_true = DDNLoss.build_target_depth_from_3dcenter(
+        target_reference, gt_boxes2d, gt_center_depth, num_gt_per_img
+    )
 
-    return depth_map_true, depth_map_logits
+    return depth_map_true, depth_map_pred_thresholded, depth_map_pred_softmax
 
-def cmap_mono(mono):
-    mono_jet = (mono - mono.min()) / (mono.max() - mono.min())
+def cmap_mono(mono, depth_min, depth_max):
+    if depth_max <= depth_min:
+        raise ValueError(f"Invalid depth display range [{depth_min}, {depth_max}]")
+    mono = np.nan_to_num(mono, nan=depth_min, posinf=depth_max, neginf=depth_min)
+    mono_jet = (np.clip(mono, depth_min, depth_max) - depth_min) / (depth_max - depth_min)
     mono_jet = (mono_jet * 255).astype(np.uint8)
     mono_jet = cv2.applyColorMap(mono_jet, cv2.COLORMAP_JET)
 
     return mono_jet
+
+
+def cmap_mono_relative(mono, lower_percentile=2.0, upper_percentile=98.0):
+    """Colorize one map by robust per-image contrast; colors are relative."""
+    mono = np.asarray(mono, dtype=np.float32)
+    finite = mono[np.isfinite(mono)]
+    if finite.size == 0:
+        return np.zeros((*mono.shape, 3), dtype=np.uint8), 0.0, 1.0
+    lower, upper = np.percentile(finite, [lower_percentile, upper_percentile])
+    if upper <= lower:
+        upper = lower + 1e-6
+    scaled = np.clip((np.nan_to_num(mono, nan=lower) - lower) / (upper - lower), 0, 1)
+    color = cv2.applyColorMap((scaled * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    return color, float(lower), float(upper)
+
+
+def sample_map_in_box(depth_map, box_xyxy, input_size, inner_fraction=0.5):
+    """Return the median map value from the central part of an input-frame box."""
+    depth_map = np.asarray(depth_map, dtype=np.float32)
+    if depth_map.ndim != 2 or not np.isfinite(depth_map).any():
+        return float("nan")
+    input_h, input_w = input_size
+    x1, y1, x2, y2 = np.asarray(box_xyxy, dtype=np.float32)
+    if x2 <= x1 or y2 <= y1:
+        return float("nan")
+
+    center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
+    half_w = (x2 - x1) * inner_fraction / 2
+    half_h = (y2 - y1) * inner_fraction / 2
+    map_h, map_w = depth_map.shape
+    mx1 = int(np.floor((center_x - half_w) * map_w / input_w))
+    mx2 = int(np.ceil((center_x + half_w) * map_w / input_w))
+    my1 = int(np.floor((center_y - half_h) * map_h / input_h))
+    my2 = int(np.ceil((center_y + half_h) * map_h / input_h))
+    mx1, mx2 = np.clip([mx1, mx2], 0, map_w)
+    my1, my2 = np.clip([my1, my2], 0, map_h)
+    region = depth_map[my1:my2, mx1:mx2]
+    region = region[np.isfinite(region)]
+    if region.size == 0:
+        px = int(np.clip(center_x * map_w / input_w, 0, map_w - 1))
+        py = int(np.clip(center_y * map_h / input_h, 0, map_h - 1))
+        return float(depth_map[py, px])
+    return float(np.median(region))
+
+
+def box_iou_xyxy(box_a, box_b):
+    box_a = np.asarray(box_a, dtype=np.float32)
+    box_b = np.asarray(box_b, dtype=np.float32)
+    x1, y1 = np.maximum(box_a[:2], box_b[:2])
+    x2, y2 = np.minimum(box_a[2:], box_b[2:])
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+    area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+    return intersection / max(area_a + area_b - intersection, 1e-6)
+
+
+def draw_depth_readouts(image, lines):
+    """Draw compact per-object depth measurements in a dark image overlay."""
+    if not lines:
+        return image
+    image = image.copy()
+    visible_lines = lines[:6]
+    if len(lines) > len(visible_lines):
+        visible_lines.append(f"... {len(lines) - len(visible_lines)} more objects")
+    text_lines = ["GT z | DPT inner-box p50 | Mono inner-box p50 | best detection z (IoU)"]
+    text_lines.extend(visible_lines)
+    line_height = 19
+    panel_h = line_height * len(text_lines) + 8
+    panel_w = min(image.shape[1], 1040)
+    overlay = image.copy()
+    cv2.rectangle(overlay, (0, 0), (panel_w, panel_h), (0, 0, 0), -1)
+    image = cv2.addWeighted(overlay, 0.78, image, 0.22, 0)
+    for line_index, text in enumerate(text_lines):
+        cv2.putText(
+            image,
+            text,
+            (8, 18 + line_index * line_height),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.43,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return image
+
+
+def label_plot_panel(image, title, size):
+    """Resize a BGR panel, then add a title at the final display resolution."""
+    image = image.copy()
+    height, width = size
+    if image.shape[:2] != (height, width):
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
+    cv2.rectangle(image, (0, 0), (image.shape[1] - 1, 26), (0, 0, 0), -1)
+    cv2.putText(
+        image,
+        title,
+        (8, 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return image
 
 def prepare_plot_tensor(images, size):
     h, w = size
@@ -125,6 +250,15 @@ def prepare_plot_tensor(images, size):
 
     image_tensor = torch.concatenate(image_tensor, dim=1)
     return image_tensor
+
+
+def prepare_plot_grid(rows, size):
+    """Convert BGR/grayscale panels into a two-dimensional RGB tensor grid."""
+    tensor_rows = []
+    for row in rows:
+        tensor_panels = [prepare_plot_tensor([panel], size) for panel in row]
+        tensor_rows.append(torch.concatenate(tensor_panels, dim=2))
+    return torch.concatenate(tensor_rows, dim=1)
 
 class Tester(object):
     def __init__(self,
@@ -320,7 +454,9 @@ class Tester(object):
                     outputs,
                     targets,
                     decoded,
+                    inputs,
                     original_calibs,
+                    calibs_for_decode,
                     info,
                     step,
                     batch_index=0,
@@ -539,15 +675,31 @@ class Tester(object):
         rank_zero = self.fabric.is_global_zero
         return rank_zero and (self.logged_images < self.images_to_log) and (step is not None) and batch_idx % 32 == 0
 
-    def log_images(self, outputs, targets, decoded, calibs_orig, info, step, batch_index):
-
-        # Use ORIGINAL calibration for visualization (predictions already converted to original coords)
-        calib = calibs_orig[batch_index]
+    def log_images(
+        self,
+        outputs,
+        targets,
+        decoded,
+        inputs,
+        calibs_orig,
+        calibs_model,
+        info,
+        step,
+        batch_index,
+    ):
+        # Depth and region maps are produced on the model input grid. Visualize
+        # all panels on that same grid instead of stretching them over the
+        # dataset's original, potentially uncropped image.
         img_id = info['img_id'][batch_index]
-        input_img = self.dataloader.dataset.get_image(img_id)
-        input_img = np.array(input_img)
+        mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+        input_rgb = inputs[batch_index].detach().float().cpu().numpy().transpose(1, 2, 0)
+        input_rgb = np.clip((input_rgb * std + mean) * 255.0, 0, 255).astype(np.uint8)
+        input_img = cv2.cvtColor(input_rgb, cv2.COLOR_RGB2BGR)
+        img_h, img_w = input_img.shape[:2]
 
-        # Get list of Object3d from predictions (already in original coordinates)
+        # Decode predictions used the transformed calibration, so draw them
+        # directly in model-input coordinates.
         box_pred_objs = []
         for pred_box in decoded[img_id]:
             class_name = self.class_name[int(pred_box[0])]
@@ -557,37 +709,173 @@ class Tester(object):
             obj_pred = Object3d(kitti_str)
             box_pred_objs.append(obj_pred)
 
-        # Get list of Object3d from ground truth (in original coordinates)
-        box_true_obj = self.dataloader.dataset.get_label(img_id)  # type: list[Object3d]
+        # Ground truth annotations remain in source-image coordinates. Apply
+        # the exact image transform used by the dataset before drawing.
+        box_true_obj = self.dataloader.dataset.get_label(img_id)
+        source_calib = calibs_orig[batch_index]
+        scale = float(info['resize_scale'][batch_index])
+        offset_x = float(info['pad_w'][batch_index])
+        offset_y = float(info['pad_h'][batch_index])
+        flip = bool(info.get('flip', [False] * len(info['img_id']))[batch_index])
         mask = [obj.trucation <= 0.5 and obj.occlusion <= 2 for obj in box_true_obj]
 
-        # Plot 3D true-pred boxes (both in original coordinates now)
-        img_box_true = plot_boxes(input_img, box_true_obj, calib, mask)
-        img_box_pred = plot_boxes(input_img, box_pred_objs, calib)
+        img_box_true = input_img.copy()
+        gt_model_boxes = []
+        for obj, visible in zip(box_true_obj, mask):
+            color = (0, 255, 0) if visible else (0, 0, 255)
+            box = np.asarray(obj.box2d, dtype=np.float32).copy()
+            box[[0, 2]] = box[[0, 2]] * scale + offset_x
+            box[[1, 3]] = box[[1, 3]] * scale + offset_y
+            if flip:
+                box[0], box[2] = img_w - box[2], img_w - box[0]
+            box[[0, 2]] = np.clip(box[[0, 2]], 0, img_w - 1)
+            box[[1, 3]] = np.clip(box[[1, 3]], 0, img_h - 1)
+            gt_model_boxes.append(box.copy())
+            if box[2] > box[0] and box[3] > box[1]:
+                cv2.rectangle(
+                    img_box_true,
+                    (int(round(box[0])), int(round(box[1]))),
+                    (int(round(box[2])), int(round(box[3]))),
+                    color,
+                    2,
+                )
+            img_box_true = draw_calibrated_box3d(
+                img_box_true,
+                obj.generate_corners3d(),
+                source_calib,
+                color=(0, 180, 255),
+                thickness=2,
+                scale=scale,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                flip=flip,
+            )
 
-        """cv2.imwrite("box_true_orig.png", img_box_true)
-        cv2.imwrite("box_pred_orig.png", img_box_pred)"""
+        img_box_pred = plot_boxes(input_img, box_pred_objs, calibs_model[batch_index])
 
-        # Plot depth mask pred
-        depth_maps_true, depth_maps_pred = get_depthmap_true(outputs, targets, self.cfg)
-        depth_maps_true = cmap_mono(depth_maps_true[batch_index].cpu().numpy())
-        depth_maps_pred = cmap_mono(depth_maps_pred[batch_index][0].cpu().numpy())
+        # Compare the raw DPT prior, the ordinary MonoDPT depth expectation,
+        # and the legacy median-thresholded display on one fixed metric scale.
+        depth_min = float(self.cfg.model.depth_min)
+        depth_max = float(self.cfg.model.depth_max)
+        depth_maps_true, depth_pred_thresholded, depth_pred_softmax = get_depthmap_true(
+            outputs, targets, self.cfg
+        )
+        depth_true_map = depth_maps_true[batch_index].detach().float().cpu().numpy()
+        depth_softmax_tensor_all = depth_pred_softmax
+        depth_softmax_map = depth_pred_softmax[batch_index].detach().float().cpu().numpy()
+        depth_maps_true = cmap_mono(depth_true_map, depth_min, depth_max)
+        depth_pred_thresholded = cmap_mono(
+            depth_pred_thresholded[batch_index].cpu().numpy(), depth_min, depth_max
+        )
+        depth_pred_softmax = cmap_mono(depth_softmax_map, depth_min, depth_max)
 
-        """cv2.imwrite("depth_maps_true.png", depth_maps_true)
-        cv2.imwrite("depth_maps_pred.png", depth_maps_pred)"""
+        depth_prior = outputs.get('pred_depth_prior')
+        if depth_prior is not None:
+            depth_prior_map = depth_prior[batch_index, 0].detach().float().cpu().numpy()
+            depth_prior_fixed = cmap_mono(depth_prior_map, depth_min, depth_max)
+            depth_prior_relative, prior_low, prior_high = cmap_mono_relative(depth_prior_map)
+        else:
+            depth_prior_map = np.full((img_h, img_w), np.nan, dtype=np.float32)
+            depth_prior_fixed = np.zeros((img_h, img_w, 3), dtype=np.uint8)
+            depth_prior_relative = depth_prior_fixed.copy()
+            prior_low, prior_high = float("nan"), float("nan")
+
+        # Upscale prediction to the target-map grid and show absolute error
+        # only where the GT depth target has supervision.
+        depth_softmax_tensor = depth_softmax_tensor_all[batch_index : batch_index + 1]
+        depth_softmax_up = F.interpolate(
+            depth_softmax_tensor.unsqueeze(1),
+            size=depth_true_map.shape,
+            mode="bilinear",
+            align_corners=False,
+        )[0, 0].detach().cpu().numpy()
+        valid_depth = np.isfinite(depth_true_map) & (depth_true_map > 0)
+        depth_error = np.zeros_like(depth_true_map, dtype=np.float32)
+        depth_error[valid_depth] = np.abs(
+            depth_softmax_up[valid_depth] - depth_true_map[valid_depth]
+        )
+        error_max = min(20.0, depth_max)
+        depth_error_color = cmap_mono(depth_error, 0.0, error_max)
+        depth_error_color[~valid_depth] = 0
+
+        # Sample the inner half of each GT box to avoid mixing the object with
+        # surrounding background. Match the best same-class 2D detection.
+        readout_lines = []
+        for obj, gt_box in zip(box_true_obj, gt_model_boxes):
+            dpt_value = sample_map_in_box(
+                depth_prior_map, gt_box, (img_h, img_w)
+            )
+            mono_value = sample_map_in_box(
+                depth_softmax_map, gt_box, (img_h, img_w)
+            )
+            matching_dets = []
+            for pred_box in decoded[img_id]:
+                pred_class_name = self.class_name[int(pred_box[0])]
+                if pred_class_name != obj.cls_type:
+                    continue
+                iou = box_iou_xyxy(gt_box, pred_box[2:6])
+                if iou >= 0.1:
+                    matching_dets.append((iou, float(pred_box[11])))
+            if matching_dets:
+                best_iou, detection_depth = max(matching_dets, key=lambda item: item[0])
+                detection_text = f"{detection_depth:.1f}m ({best_iou:.2f})"
+            else:
+                detection_text = "--"
+            dpt_text = f"{dpt_value:.2f}" if np.isfinite(dpt_value) else "--"
+            mono_text = f"{mono_value:.1f}m" if np.isfinite(mono_value) else "--"
+            readout_lines.append(
+                f"{obj.cls_type}: GT {obj.pos[2]:.1f}m | DPT p50 {dpt_text} | "
+                f"Mono p50 {mono_text} | det {detection_text}"
+            )
+        img_box_true = draw_depth_readouts(img_box_true, readout_lines)
+
+        depth_range = f"{depth_min:g}-{depth_max:g} m"
+        depth_maps_true = label_plot_panel(
+            depth_maps_true, f"GT center depth ({depth_range})", (img_h, img_w)
+        )
+        depth_pred_thresholded = label_plot_panel(
+            depth_pred_thresholded,
+            f"MonoDPT median-threshold ({depth_range})",
+            (img_h, img_w),
+        )
+        depth_pred_softmax = label_plot_panel(
+            depth_pred_softmax,
+            f"MonoDPT softmax expected depth ({depth_range})",
+            (img_h, img_w),
+        )
+        depth_prior_relative = label_plot_panel(
+            depth_prior_relative,
+            f"DPT prior relative p2-p98 [{prior_low:.2f}, {prior_high:.2f}]",
+            (img_h, img_w),
+        )
+        depth_prior_fixed = label_plot_panel(
+            depth_prior_fixed, f"DPT prior fixed range ({depth_range})", (img_h, img_w)
+        )
+        depth_error_color = label_plot_panel(
+            depth_error_color,
+            f"Abs error on GT pixels (0-{error_max:g} m; clipped)",
+            (img_h, img_w),
+        )
 
         # plot region seg
         obj_region_true = (targets['obj_region'][batch_index].cpu().numpy() * 255 ).astype(np.uint8)
         obj_region_pred = (outputs['pred_region_prob'][-1][batch_index][0].cpu().numpy() * 255).astype(np.uint8)
 
         target_h, target_w, _ = img_box_true.shape
-        true_image = prepare_plot_tensor([img_box_true, depth_maps_true, obj_region_true], (target_h, target_w))
-        pred_image = prepare_plot_tensor([img_box_pred, depth_maps_pred, obj_region_pred], (target_h, target_w))
+        panel_rows = [
+            [img_box_true, img_box_pred],
+            [depth_maps_true, depth_pred_thresholded],
+            [depth_prior_relative, depth_prior_fixed],
+            [depth_pred_softmax, depth_error_color],
+            [obj_region_true, obj_region_pred],
+        ]
+        log_image = prepare_plot_grid(panel_rows, (target_h, target_w))
 
-        log_image = torch.concatenate([true_image, pred_image], dim=2)
-
-        # log_image_np = log_image.numpy().transpose(1,2,0)
-        # cv2.imwrite(f"logs/log_image_{self.logged_images}.png", log_image_np)
+        log_image_np = log_image.numpy().transpose(1,2,0)
+        cv2.imwrite(
+            f"logs/log_image_{self.logged_images}.png",
+            cv2.cvtColor(log_image_np, cv2.COLOR_RGB2BGR),
+        )
         # raise Exception
 
         self.fabric.logger.log_image(

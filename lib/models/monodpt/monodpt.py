@@ -405,6 +405,15 @@ class MonoDPT(nn.Module):
         out['pred_angle'] = outputs_angle[-1]
         out['pred_depth_map_logits'] = pred_depth_map_logits
         out['pred_region_prob'] = region_probs
+        if not self.training and self.backbone_type in (
+            "dinov2_vits",
+            "dinov2_vitb",
+            "dinov2_vitl",
+        ):
+            # Expose the integrated DPT head's crop-space depth map for
+            # validation visualization. This is the prior consumed by the
+            # depth predictor, not its later depth-bin prediction.
+            out['pred_depth_prior'] = raw_features
 
         out['inter_outputs'] = self._set_inter_loss(inter_class, inter_coord)
         
