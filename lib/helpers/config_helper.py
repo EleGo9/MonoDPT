@@ -52,6 +52,7 @@ class DatasetConfig(BaseModel):
     filename_format: Optional[List] = None  # e.g., '%06d' for 000000.png, '%08d' for 00000000.png
     original_resolution: Optional[List[int]] = None  # e.g., [1920, 1080]
     kitti_official_eval: Optional[bool] = None
+    iou_thres: Optional[float] = None  # e.g., 0.7 for KITTI official evaluation
 
     class Config:
         allow_population_by_field_name = True
