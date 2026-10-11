@@ -61,7 +61,7 @@ model:
   device: 'cuda'
 
   # Backbone
-  backbone: 'dinov2_vits'
+  backbone: 'dinov2_vitb'
   use_dpt_head: True
   train_backbone: True
   num_feature_levels: 3
@@ -140,7 +140,7 @@ trainer:
   save_frequency: 1  # checkpoint save interval (in epoch)
   #resume_model: "dummy-69c79ofe"
   #pretrain_model: "/home/carmelo/RICERCA/DET3D/MonoDGP/logs/checkpoints/dummy-69c79ofe/checkpoint.pth"
-  depthany_model: "/home/matte/MonoDPT/depth_anything_v2_vits.pth" 
+  depthany_model: "/home/matte/Documents/UnimoreRacing/MonoDPT/depth_anything_v2_vitb.pth"
   save_all: False  # False for only savng the best and latest ckpts
   use_dn: False
   scalar: 5
