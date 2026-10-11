@@ -23,49 +23,23 @@ from lib.helpers.decode_helper import extract_dets_from_outputs
 from lib.helpers.decode_helper import decode_detections
 from lib.helpers.config_helper import Config
 from lib.datasets.kitti.kitti_utils import Object3d, Calibration
+from lib.datasets.utils import draw_calibrated_box3d
 from lib.models.monodpt.depth_predictor.ddn_loss import DDNLoss
 
 from utils import box_ops
 
 def plot_boxes(img: np.array, boxes: list[Object3d], calib: Calibration, mask: Optional[list] = None):
-    corners_3d = []
-    for box in boxes:
-        box_coords_3d = box.generate_corners3d()
-        corners_3d.append(box_coords_3d)
-
     img_box = img.copy()
-
-    if len(corners_3d) > 0:
-        corners_3d = np.stack(corners_3d)
-        _, box_coords_2d = calib.corners3d_to_img_boxes(corners_3d)
-
-        img_box = draw_boxes(img_box, box_coords_2d, mask=mask)
-
+    for index, box in enumerate(boxes):
+        color = (0, 255, 0) if mask is None or mask[index] else (0, 0, 255)
+        img_box = draw_calibrated_box3d(
+            img_box,
+            box.generate_corners3d(),
+            calib,
+            color=color,
+            thickness=2,
+        )
     return img_box
-
-def draw_boxes(img, corners_2d_all, thickness=2, mask=None):
-
-    """Draw 3D bounding box in 2D image."""
-    corners_2d_all = corners_2d_all.astype(int) # .T
-    for index, corners_2d in enumerate(corners_2d_all):
-        if mask is not None:
-            if mask[index]:
-                color = (0, 255, 0)
-            else:
-                color = (0, 0, 255)  # red
-        else:
-            color = (0, 255, 0)
-
-        # 4 bottom edges
-        for i, j in zip([0,1,2,3],[1,2,3,0]):
-            cv2.line(img, tuple(corners_2d[i]), tuple(corners_2d[j]), color, thickness)
-        # 4 top edges
-        for i, j in zip([4,5,6,7],[5,6,7,4]):
-            cv2.line(img, tuple(corners_2d[i]), tuple(corners_2d[j]), color, thickness)
-        # vertical edges
-        for i, j in zip(range(4), range(4,8)):
-            cv2.line(img, tuple(corners_2d[i]), tuple(corners_2d[j]), color, thickness)
-    return img
 
 def build_weighted_depth_from_logits(depth_logits, depth_num_bins, depth_min, depth_max):
     bin_size = 2 * (depth_max - depth_min) / (depth_num_bins * (1 + depth_num_bins))
@@ -612,9 +586,9 @@ class Tester(object):
 
         log_image = torch.concatenate([true_image, pred_image], dim=2)
 
-        """log_image_np = log_image.numpy().transpose(1,2,0)
-        cv2.imwrite(f"log_image_{self.logged_images}.png", log_image_np)
-        raise Exception"""
+        # log_image_np = log_image.numpy().transpose(1,2,0)
+        # cv2.imwrite(f"logs/log_image_{self.logged_images}.png", log_image_np)
+        # raise Exception
 
         self.fabric.logger.log_image(
             f"val_images_{self.logged_images}",

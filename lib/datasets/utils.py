@@ -98,27 +98,62 @@ def draw_msra_gaussian(heatmap, center, sigma):
     return heatmap
 
 
-def draw_projected_box3d(image, corners3d, color=(255, 255, 255), thickness=1):
-    ''' Draw 3d bounding box in image
-    input:
-        image: RGB image
-        corners3d: (8,3) array of vertices (in image plane) for the 3d box in following order:
-            1 -------- 0
-           /|         /|
-          2 -------- 3 .
-          | |        | |
-          . 5 -------- 4
-          |/         |/
-          6 -------- 7
+def draw_projected_box3d(image, corners2d, color=(255, 255, 255), thickness=1):
+    """Draw a box from 8 projected corners or a projected edge path."""
+    corners2d = np.asarray(corners2d)
+    if corners2d.shape == (8, 2):
+        edges = (
+            (0, 1), (1, 2), (2, 3), (3, 0),
+            (4, 5), (5, 6), (6, 7), (7, 4),
+            (0, 4), (1, 5), (2, 6), (3, 7),
+        )
+    elif corners2d.ndim == 2 and corners2d.shape[1] == 2 and corners2d.shape[0] >= 2:
+        # project_3d returns vertices in an order where each adjacent pair is
+        # one box edge.
+        edges = tuple((i, i + 1) for i in range(corners2d.shape[0] - 1))
+    else:
+        raise ValueError(
+            f"Expected projected corners with shape (8,2) or an edge path, got {corners2d.shape}"
+        )
 
-    '''
-
-    corners3d = corners3d.astype(np.int32)
-    for k in range(0, 4):
-        i, j = k, (k + 1) % 4
-        cv2.line(image, (corners3d[i, 0], corners3d[i, 1]), (corners3d[j, 0], corners3d[j, 1]), color, thickness, lineType=cv2.LINE_AA)
-        i, j = k + 4, (k + 1) % 4 + 4
-        cv2.line(image, (corners3d[i, 0], corners3d[i, 1]), (corners3d[j, 0], corners3d[j, 1]), color, thickness, lineType=cv2.LINE_AA)
-        i, j = k, k + 4
-        cv2.line(image, (corners3d[i, 0], corners3d[i, 1]), (corners3d[j, 0], corners3d[j, 1]), color, thickness, lineType=cv2.LINE_AA)
+    finite = np.isfinite(corners2d).all(axis=1)
+    corners2d = np.where(finite[:, None], corners2d, 0).astype(np.int32)
+    for start, end in edges:
+        if not finite[start] or not finite[end]:
+            continue
+        cv2.line(
+            image,
+            tuple(corners2d[start]),
+            tuple(corners2d[end]),
+            color,
+            thickness,
+            lineType=cv2.LINE_AA,
+        )
     return image
+
+
+def draw_calibrated_box3d(
+    image,
+    corners3d,
+    calib,
+    color=(255, 255, 255),
+    thickness=1,
+    *,
+    scale=1.0,
+    offset_x=0.0,
+    offset_y=0.0,
+    flip=False,
+):
+    """Project camera-frame corners through calibration and draw the box.
+
+    ``rect_to_img`` applies the calibration's lens distortion. The optional
+    scale, offsets, and flip map projected source-image points into a
+    resized/padded or horizontally reflected image.
+    """
+    corners2d, _ = calib.rect_to_img(np.asarray(corners3d, dtype=np.float32))
+    corners2d = np.asarray(corners2d, dtype=np.float32)
+    corners2d[:, 0] = corners2d[:, 0] * scale + offset_x
+    corners2d[:, 1] = corners2d[:, 1] * scale + offset_y
+    if flip:
+        corners2d[:, 0] = image.shape[1] - corners2d[:, 0]
+    return draw_projected_box3d(image, corners2d, color=color, thickness=thickness)

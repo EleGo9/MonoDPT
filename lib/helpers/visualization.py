@@ -8,6 +8,7 @@ import shutil
 import torch
 from PIL import Image
 from lib.helpers.file_io import read_csv
+from lib.datasets.utils import draw_projected_box3d
 
 def mkdir_if_missing(directory, delete_if_exist=False):
     """
@@ -156,7 +157,8 @@ def project_3d(calib, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
         # translate
         corners_3d += np.array([x3d, y3d, z3d]).reshape((3, 1))
 
-        # use Calibration object to project with distortion
+_image.numpy().transpose(1,2,0)
+        cv2.imwrite(f"logs/lo        # use Calibration object to project with distortion
         # rect_to_img takes (N, 3) and returns (N, 2), depths
         corners_2D, _ = calib.rect_to_img(corners_3d.T)
         corners_2D = corners_2D.T # back to (2, N)
@@ -209,14 +211,8 @@ def draw_transparent_box(im, box, blend=0.5, color=(0, 255, 255)):
 
 
 def draw_3d_box(im, verts, color=(0, 200, 200), thickness=1):
-
-    for lind in range(0, verts.shape[0] - 1):
-        v1 = verts[lind]
-        v2 = verts[lind + 1]
-        cv2.line(im, (int(v1[0]), int(v1[1])), (int(v2[0]), int(v2[1])), color, thickness)
-
-    # draw_transparent_polygon(im, verts[5:9, :], blend=0.5, color=color)
-    return im
+    """Draw already-projected 3D box vertices using the shared renderer."""
+    return draw_projected_box3d(im, verts, color=color, thickness=thickness)
 
 def get_polygon_grid(im, poly_verts):
 

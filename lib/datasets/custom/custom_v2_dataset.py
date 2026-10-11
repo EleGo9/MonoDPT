@@ -39,6 +39,7 @@ from lib.datasets.kitti.kitti_utils import (  # noqa: E402
     Object3d,
     get_objects_from_label,
 )
+from lib.datasets.utils import draw_calibrated_box3d  # noqa: E402
 from lib.datasets.utils import angle2class  # noqa: E402
 
 
@@ -749,12 +750,6 @@ def render_debug_sample(image_chw, objects, source_calib, info, *, class_names=N
     scale = float(info["resize_scale"])
     offset_x, offset_y = float(info["pad_w"]), float(info["pad_h"])
     flip = bool(info.get("flip", False))
-    edge_pairs = (
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
-    )
-
     for obj in objects:
         box = np.asarray(obj.box2d, dtype=np.float32).copy()
         box[[0, 2]] = box[[0, 2]] * scale + offset_x
@@ -783,20 +778,17 @@ def render_debug_sample(image_chw, objects, source_calib, info, *, class_names=N
                     cv2.LINE_AA,
                 )
 
-        corners3d = obj.generate_corners3d().astype(np.float32)
-        # Use the same calibrated projection as target-center encoding; this
-        # includes the camera's distortion coefficients for the source image.
-        corners2d, _ = source_calib.rect_to_img(corners3d)
-        corners2d = corners2d * scale + np.asarray([offset_x, offset_y], dtype=np.float32)
-        if flip:
-            # Reflecting projected vertices is equivalent to negating camera X
-            # and changing yaw from ry to pi-ry before projection.
-            corners2d[:, 0] = width - corners2d[:, 0]
-        corners2d[:, 0] = np.clip(corners2d[:, 0], -width, 2 * width)
-        corners2d[:, 1] = np.clip(corners2d[:, 1], -height, 2 * height)
-        corners2d = np.round(corners2d).astype(np.int32)
-        for start, end in edge_pairs:
-            cv2.line(canvas, tuple(corners2d[start]), tuple(corners2d[end]), (0, 180, 255), 2)
+        draw_calibrated_box3d(
+            canvas,
+            obj.generate_corners3d(),
+            source_calib,
+            color=(0, 180, 255),
+            thickness=2,
+            scale=scale,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            flip=flip,
+        )
     return cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
 
 
