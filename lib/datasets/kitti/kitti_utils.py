@@ -252,7 +252,9 @@ class Calibration(object):
         # cy = calibs['K'][1, 2]
         # fx = calibs['K'][0, 0]
         # fy = calibs['K'][1, 1]
-        d = calibs['D']
+        # Work on a copy: projection must not modify calibration shared by
+        # other points, boxes, or later evaluation steps.
+        d = np.asarray(calibs['D']).copy()
         d[-1] = 0 # don't use last value
 
         x = (pt[0] - self.cu) / self.fu
