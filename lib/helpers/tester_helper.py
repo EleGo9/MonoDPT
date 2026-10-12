@@ -871,11 +871,11 @@ class Tester(object):
         ]
         log_image = prepare_plot_grid(panel_rows, (target_h, target_w))
 
-        log_image_np = log_image.numpy().transpose(1,2,0)
-        cv2.imwrite(
-            f"logs/log_image_{self.logged_images}.png",
-            cv2.cvtColor(log_image_np, cv2.COLOR_RGB2BGR),
-        )
+        # log_image_np = log_image.numpy().transpose(1,2,0)
+        # cv2.imwrite(
+        #     f"logs/log_image_{self.logged_images}.png",
+        #     cv2.cvtColor(log_image_np, cv2.COLOR_RGB2BGR),
+        # )
         # raise Exception
 
         self.fabric.logger.log_image(
