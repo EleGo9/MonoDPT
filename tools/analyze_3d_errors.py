@@ -155,20 +155,25 @@ def json_default(value):
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def compute_ap_diagnostics(gt_annos, dt_annos, class_name, max_depth, min_overlap):
+def compute_ap_diagnostics(
+        gt_annos, dt_annos, class_name, max_depth, min_overlap,
+        metrics=((0, "2D"), (1, "BEV"), (2, "3D")),
+        precomputed_overlaps=None):
     """Reproduce Indy AP sampling and retain the underlying TP/FP/FN counts."""
     prepared = kitti_eval._prepare_data(
         gt_annos, dt_annos, class_name, 0, max_depth
     )
     (gt_datas, dt_datas, ignored_gts, ignored_dets, dontcares,
      _, valid_gt_count) = prepared
-    metrics = ((0, "2D"), (1, "BEV"), (2, "3D"))
     results = {}
 
     for metric, name in metrics:
-        overlaps, _, _, _ = kitti_eval.calculate_iou_partly(
-            dt_annos, gt_annos, metric, 100
-        )
+        if precomputed_overlaps and metric in precomputed_overlaps:
+            overlaps = precomputed_overlaps[metric]
+        else:
+            overlaps, _, _, _ = kitti_eval.calculate_iou_partly(
+                dt_annos, gt_annos, metric, 100
+            )
         matched_scores = []
         for i in range(len(gt_annos)):
             stats = compute_statistics_matched(
@@ -211,7 +216,8 @@ def compute_ap_diagnostics(gt_annos, dt_annos, class_name, max_depth, min_overla
         for index, point in enumerate(points[:41]):
             point["interpolated_precision"] = float(precision_curve[index])
         results[name] = {
-            "ap": float(np.sum(precision_curve[sampled_indices]) / 11 * 100),
+            "ap_r11": float(np.sum(precision_curve[sampled_indices]) / 11 * 100),
+            "ap_r40": float(np.sum(precision_curve[1:41]) / 40 * 100),
             "valid_gt": int(valid_gt_count),
             "threshold_count": int(len(thresholds)),
             "points": points,
@@ -224,6 +230,97 @@ def compute_ap_diagnostics(gt_annos, dt_annos, class_name, max_depth, min_overla
             ],
         }
     return results
+
+
+def make_fixed_2d_associations(overlaps_2d, ignored_gts, ignored_dets):
+    """Greedy one-to-one matching by original 2D IoU; independent of 3D fields."""
+    associations = []
+    for image_idx, overlaps in enumerate(overlaps_2d):
+        candidates = []
+        for gt_idx, gt_state in enumerate(ignored_gts[image_idx]):
+            if gt_state != 0:
+                continue
+            for det_idx, det_state in enumerate(ignored_dets[image_idx]):
+                if det_state != 0:
+                    continue
+                iou = float(overlaps[det_idx, gt_idx])
+                if iou > 0:
+                    candidates.append((-iou, gt_idx, det_idx))
+        candidates.sort()
+        assigned_gts, assigned_dets = set(), set()
+        image_associations = []
+        for neg_iou, gt_idx, det_idx in candidates:
+            if gt_idx in assigned_gts or det_idx in assigned_dets:
+                continue
+            assigned_gts.add(gt_idx)
+            assigned_dets.add(det_idx)
+            image_associations.append((gt_idx, det_idx, -neg_iou))
+        associations.append(image_associations)
+    return associations
+
+
+def evaluate_3d_oracle_scenarios(
+        gt_annos, dt_annos, ignored_gts, ignored_dets, associations,
+        class_name, max_depth, min_overlap, baseline_overlaps_3d):
+    """Run fixed-association component replacements and report 3D IoU/AP."""
+    scenarios = {
+        "baseline": (),
+        "oracle_y": ("y",),
+        "oracle_height": ("height",),
+        "oracle_y_and_height": ("y", "height"),
+        "oracle_depth": ("depth",),
+        "oracle_yaw": ("yaw",),
+    }
+    outputs = {}
+    for scenario, components in scenarios.items():
+        changed = []
+        for image_idx, dt_anno in enumerate(dt_annos):
+            altered = {key: value.copy() if isinstance(value, np.ndarray) else value
+                       for key, value in dt_anno.items()}
+            for gt_idx, det_idx, _ in associations[image_idx]:
+                gt = gt_annos[image_idx]
+                if "y" in components:
+                    altered["location"][det_idx, 1] = gt["location"][gt_idx, 1]
+                if "height" in components:
+                    altered["dimensions"][det_idx, 0] = gt["dimensions"][gt_idx, 0]
+                if "depth" in components:
+                    altered["location"][det_idx, 2] = gt["location"][gt_idx, 2]
+                if "yaw" in components:
+                    altered["rotation_y"][det_idx] = gt["rotation_y"][gt_idx]
+            changed.append(altered)
+
+        if scenario == "baseline":
+            overlaps = baseline_overlaps_3d
+        else:
+            overlaps, _, _, _ = kitti_eval.calculate_iou_partly(
+                changed, gt_annos, 2, 100
+            )
+        ap = compute_ap_diagnostics(
+            gt_annos, changed, class_name, max_depth, min_overlap,
+            metrics=((2, "3D"),), precomputed_overlaps={2: overlaps},
+        )["3D"]
+        best_ious = []
+        for image_idx, overlap in enumerate(overlaps):
+            valid_gt_indices = np.flatnonzero(ignored_gts[image_idx] == 0)
+            valid_det_indices = np.flatnonzero(ignored_dets[image_idx] == 0)
+            for gt_idx in valid_gt_indices:
+                if len(valid_det_indices):
+                    best_ious.append(float(np.max(overlap[valid_det_indices, gt_idx])))
+                else:
+                    best_ious.append(0.0)
+        best_ious = np.asarray(best_ious)
+        outputs[scenario] = {
+            "replaced_components": list(components),
+            "fixed_association_count": int(sum(map(len, associations))),
+            "ap_r11": ap["ap_r11"],
+            "ap_r40": ap["ap_r40"],
+            "best_iou_mean": float(np.mean(best_ious)) if len(best_ious) else 0.0,
+            "best_iou_median": float(np.median(best_ious)) if len(best_ious) else 0.0,
+            "gt_coverage_iou_gt_0_3": float(np.mean(best_ious > 0.3)) if len(best_ious) else 0.0,
+            "gt_coverage_iou_gt_0_5": float(np.mean(best_ious > 0.5)) if len(best_ious) else 0.0,
+            "gt_coverage_iou_gt_0_7": float(np.mean(best_ious > 0.7)) if len(best_ious) else 0.0,
+        }
+    return outputs
 
 def main():
     parser = argparse.ArgumentParser()
@@ -292,6 +389,9 @@ def main():
     print("Computing official 3D IoU overlaps...")
     rets = kitti_eval.calculate_iou_partly(dt_annos, gt_annos, 2, 100)
     overlaps_3d, parted_overlaps, total_dt_num, total_gt_num = rets
+    overlaps_2d, _, _, _ = kitti_eval.calculate_iou_partly(
+        dt_annos, gt_annos, 0, 100
+    )
 
     print("\n" + "="*50)
     print("EVALUATION POPULATION AND AP BREAKDOWN")
@@ -308,10 +408,12 @@ def main():
     ap_diagnostics = compute_ap_diagnostics(
         gt_annos, dt_annos, args.class_name, args.max_depth,
         args.official_threshold,
+        precomputed_overlaps={2: overlaps_3d, 0: overlaps_2d},
     )
     for metric_name, metric_result in ap_diagnostics.items():
         print(
-            f"{metric_name} AP: {metric_result['ap']:.4f} "
+            f"{metric_name} AP_R11: {metric_result['ap_r11']:.4f}; "
+            f"AP_R40: {metric_result['ap_r40']:.4f} "
             f"({metric_result['threshold_count']} score thresholds; "
             f"{metric_result['valid_gt']} valid GTs)"
         )
@@ -328,6 +430,29 @@ def main():
             for point in sampled
         ))
     print("  (Lists use recall samples 0, 4, ..., 40.)")
+
+    fixed_associations = make_fixed_2d_associations(
+        overlaps_2d, ignored_gts, ignored_dets
+    )
+    oracle_diagnostics = evaluate_3d_oracle_scenarios(
+        gt_annos, dt_annos, ignored_gts, ignored_dets, fixed_associations,
+        args.class_name, args.max_depth, args.official_threshold, overlaps_3d,
+    )
+    print("\n" + "="*72)
+    print("3D COMPONENT ORACLE DIAGNOSTICS (fixed original-2D-IoU associations)")
+    print("="*72)
+    print("Each row: scenario | AP_R11 | AP_R40 | GT coverage at IoU > .7 | median best IoU")
+    for scenario, result in oracle_diagnostics.items():
+        print(
+            f"{scenario}: AP_R11={result['ap_r11']:.4f}, "
+            f"AP_R40={result['ap_r40']:.4f}, "
+            f"coverage@.7={result['gt_coverage_iou_gt_0_7'] * 100:.2f}%, "
+            f"median best IoU={result['best_iou_median']:.4f}"
+        )
+    print(
+        f"Fixed associations: {sum(map(len, fixed_associations))}; "
+        "greedy one-to-one matching by original 2D IoU, ties by GT/detection indices."
+    )
     
     print("\n" + "="*50)
     print("OFFICIAL-STYLE MATCHING")
@@ -536,6 +661,14 @@ def main():
             "valid_gt": total_valid_gt,
             "valid_detections": total_valid_dt,
             "ap_by_metric": ap_diagnostics,
+            "oracle_3d_components": {
+                "association_method": (
+                    "fixed greedy one-to-one matching by original 2D IoU>0; "
+                    "ties by GT and detection index"
+                ),
+                "association_count": int(sum(map(len, fixed_associations))),
+                "scenarios": oracle_diagnostics,
+            },
         },
         "positive_overlap_matches": all_matched_pairs,
         "diagnostic_nearest_matches_for_unmatched_gt": nearest_matches,
