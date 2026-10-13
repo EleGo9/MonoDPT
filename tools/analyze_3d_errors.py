@@ -30,12 +30,15 @@ def load_predictions(results_dir, image_ids):
 
 def compute_statistics_matched(overlaps, gt_datas, dt_datas, ignored_gt, ignored_det, dc_bboxes, metric, min_overlap, thresh=0, compute_fp=False, compute_aos=False):
     """
-    Exact replica of official compute_statistics_jit, but augmented to return
-    (gt_idx, det_idx, iou, dt_score) for matched pairs.
+    Python diagnostic copy of compute_statistics_jit, augmented with matched
+    pairs. Keep matching, FP, DontCare, and AOS behavior aligned with eval.py.
     """
     det_size = dt_datas.shape[0]
     gt_size = gt_datas.shape[0]
     dt_scores = dt_datas[:, -1] if det_size > 0 else np.array([])
+    dt_alphas = dt_datas[:, 4] if det_size > 0 else np.array([])
+    gt_alphas = gt_datas[:, 4] if gt_size > 0 else np.array([])
+    dt_bboxes = dt_datas[:, :4]
     
     assigned_detection = [False] * det_size
     ignored_threshold = [False] * det_size
@@ -98,8 +101,32 @@ def compute_statistics_matched(overlaps, gt_datas, dt_datas, ignored_gt, ignored
             tp += 1
             thresholds[thresh_idx] = dt_scores[det_idx]
             thresh_idx += 1
+            if compute_aos:
+                delta[delta_idx] = gt_alphas[i] - dt_alphas[det_idx]
+                delta_idx += 1
             assigned_detection[det_idx] = True
             matched_pairs.append((i, det_idx, max_overlap, dt_scores[det_idx]))
+
+    if compute_fp:
+        for i in range(det_size):
+            if not (assigned_detection[i] or ignored_det[i] == -1
+                    or ignored_det[i] == 1 or ignored_threshold[i]):
+                fp += 1
+        if metric == 0 and len(dc_bboxes) > 0:
+            overlaps_dt_dc = kitti_eval.image_box_overlap(dt_bboxes, dc_bboxes, 0)
+            for i in range(dc_bboxes.shape[0]):
+                for j in range(det_size):
+                    if (assigned_detection[j] or ignored_det[j] == -1
+                            or ignored_det[j] == 1 or ignored_threshold[j]):
+                        continue
+                    if overlaps_dt_dc[j, i] > min_overlap:
+                        assigned_detection[j] = True
+                        fp -= 1
+        if compute_aos:
+            tmp = np.zeros((fp + delta_idx,))
+            for i in range(delta_idx):
+                tmp[i + fp] = (1.0 + np.cos(delta[i])) / 2.0
+            similarity = np.sum(tmp) if tp > 0 or fp > 0 else -1
 
     return tp, fp, fn, similarity, thresholds[:thresh_idx], matched_pairs
 
@@ -117,6 +144,86 @@ def print_stats(name, values):
 
 def wrap_angle(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+def json_default(value):
+    """Convert NumPy values that the standard JSON encoder cannot serialize."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def compute_ap_diagnostics(gt_annos, dt_annos, class_name, max_depth, min_overlap):
+    """Reproduce Indy AP sampling and retain the underlying TP/FP/FN counts."""
+    prepared = kitti_eval._prepare_data(
+        gt_annos, dt_annos, class_name, 0, max_depth
+    )
+    (gt_datas, dt_datas, ignored_gts, ignored_dets, dontcares,
+     _, valid_gt_count) = prepared
+    metrics = ((0, "2D"), (1, "BEV"), (2, "3D"))
+    results = {}
+
+    for metric, name in metrics:
+        overlaps, _, _, _ = kitti_eval.calculate_iou_partly(
+            dt_annos, gt_annos, metric, 100
+        )
+        matched_scores = []
+        for i in range(len(gt_annos)):
+            stats = compute_statistics_matched(
+                overlaps[i], gt_datas[i], dt_datas[i], ignored_gts[i],
+                ignored_dets[i], dontcares[i], metric, min_overlap,
+                compute_fp=False,
+            )
+            matched_scores.extend(stats[4].tolist())
+
+        thresholds = np.asarray(
+            kitti_eval.get_thresholds(np.asarray(matched_scores), valid_gt_count)
+        )
+        points = []
+        for threshold in thresholds:
+            tp = fp = fn = 0
+            for i in range(len(gt_annos)):
+                stats = compute_statistics_matched(
+                    overlaps[i], gt_datas[i], dt_datas[i], ignored_gts[i],
+                    ignored_dets[i], dontcares[i], metric, min_overlap,
+                    thresh=float(threshold), compute_fp=True,
+                )
+                tp += stats[0]
+                fp += stats[1]
+                fn += stats[2]
+            precision = tp / (tp + fp) if tp + fp else 0.0
+            recall = tp / valid_gt_count if valid_gt_count else 0.0
+            points.append({
+                "threshold": float(threshold), "tp": int(tp), "fp": int(fp),
+                "fn": int(fn), "precision": precision, "recall": recall,
+            })
+
+        # Indy stores 41 PR entries, takes the precision envelope, and averages
+        # recall samples 0,4,...,40 (11 values), including zero padding.
+        precision_curve = np.zeros(41, dtype=np.float64)
+        for i, point in enumerate(points[:41]):
+            precision_curve[i] = point["precision"]
+        for i in range(len(points) - 1, -1, -1):
+            precision_curve[i] = max(precision_curve[i:])
+        sampled_indices = list(range(0, 41, 4))
+        for index, point in enumerate(points[:41]):
+            point["interpolated_precision"] = float(precision_curve[index])
+        results[name] = {
+            "ap": float(np.sum(precision_curve[sampled_indices]) / 11 * 100),
+            "valid_gt": int(valid_gt_count),
+            "threshold_count": int(len(thresholds)),
+            "points": points,
+            "sampled_points": [
+                {"sample_index": index, **(points[index] if index < len(points) else {
+                    "threshold": None, "tp": 0, "fp": 0, "fn": valid_gt_count,
+                    "precision": 0.0, "recall": 0.0,
+                })}
+                for index in sampled_indices
+            ],
+        }
+    return results
 
 def main():
     parser = argparse.ArgumentParser()
@@ -180,31 +287,70 @@ def main():
         
         total_valid_gt += num_valid_gt
         if len(ignored_det) > 0:
-            total_valid_dt += np.sum(np.array(ignored_det) == 0)
+            total_valid_dt += int(np.sum(np.array(ignored_det) == 0))
 
     print("Computing official 3D IoU overlaps...")
     rets = kitti_eval.calculate_iou_partly(dt_annos, gt_annos, 2, 100)
     overlaps_3d, parted_overlaps, total_dt_num, total_gt_num = rets
+
+    print("\n" + "="*50)
+    print("EVALUATION POPULATION AND AP BREAKDOWN")
+    print("="*50)
+    total_predictions = sum(len(anno["name"]) for anno in dt_annos)
+    class_predictions = sum(
+        int(np.sum(anno["name"] == args.class_name)) for anno in dt_annos
+    )
+    print(f"Images: {len(gt_annos)}")
+    print(f"Valid {args.class_name} GTs (depth <= {args.max_depth:g} m): {total_valid_gt}")
+    print(f"Predictions: {total_predictions} total, {class_predictions} class-labeled")
+    print(f"Class predictions accepted by evaluator: {total_valid_dt}")
+    print(f"AP overlap threshold: {args.official_threshold:g}")
+    ap_diagnostics = compute_ap_diagnostics(
+        gt_annos, dt_annos, args.class_name, args.max_depth,
+        args.official_threshold,
+    )
+    for metric_name, metric_result in ap_diagnostics.items():
+        print(
+            f"{metric_name} AP: {metric_result['ap']:.4f} "
+            f"({metric_result['threshold_count']} score thresholds; "
+            f"{metric_result['valid_gt']} valid GTs)"
+        )
+        sampled = metric_result["sampled_points"]
+        print("  sampled score thresholds: " + ", ".join(
+            "--" if point["threshold"] is None else f"{point['threshold']:.4g}"
+            for point in sampled
+        ))
+        print("  sampled TP/FP/FN: " + ", ".join(
+            f"{point['tp']}/{point['fp']}/{point['fn']}" for point in sampled
+        ))
+        print("  interpolated precision: " + ", ".join(
+            f"{point.get('interpolated_precision', 0.0):.3f}"
+            for point in sampled
+        ))
+    print("  (Lists use recall samples 0, 4, ..., 40.)")
     
     print("\n" + "="*50)
     print("OFFICIAL-STYLE MATCHING")
     print("="*50)
     
     official_tp = 0
+    official_fp = 0
     official_fn = 0
     
     for i in range(len(gt_annos)):
         tp, fp, fn, _, _, _ = compute_statistics_matched(
             overlaps_3d[i], gt_datas_list[i], dt_datas_list[i],
             ignored_gts[i], ignored_dets[i], dontcares[i],
-            metric=2, min_overlap=args.official_threshold, thresh=0.0, compute_fp=False
+            metric=2, min_overlap=args.official_threshold, thresh=0.0, compute_fp=True
         )
         official_tp += tp
+        official_fp += fp
         official_fn += fn
     
     print(f"TP at IoU > {args.official_threshold}: {official_tp}")
+    print(f"FP at IoU > {args.official_threshold}: {official_fp}")
     print(f"FN at IoU > {args.official_threshold}: {official_fn}")
-    print("(Note: This validates the matching reproduction but is not the full AP calculation)")
+    print("(At score threshold 0; AP uses the score-sampled counts above.)")
     
     print("\n" + "="*50)
     print("BEST 3D IoU PER VALID GT (Score-Independent)")
@@ -380,13 +526,24 @@ def main():
     
     # Dump to JSON
     output_data = {
+        "evaluation": {
+            "image_count": len(gt_annos),
+            "class_name": args.class_name,
+            "max_depth": args.max_depth,
+            "iou_threshold": args.official_threshold,
+            "total_predictions": total_predictions,
+            "class_predictions": class_predictions,
+            "valid_gt": total_valid_gt,
+            "valid_detections": total_valid_dt,
+            "ap_by_metric": ap_diagnostics,
+        },
         "positive_overlap_matches": all_matched_pairs,
         "diagnostic_nearest_matches_for_unmatched_gt": nearest_matches,
         "unmatched_gt_count": unmatched_gt_count,
         "total_valid_gt": total_valid_gt
     }
     with open(args.out_json, 'w') as f:
-        json.dump(output_data, f, indent=4)
+        json.dump(output_data, f, indent=4, default=json_default)
     print(f"\nSaved detailed diagnostic data to {args.out_json}")
 
 if __name__ == '__main__':
